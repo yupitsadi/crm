@@ -1,0 +1,2 @@
+# Ignore seed scripts since they use Node.js require syntax
+src/scripts/* 
