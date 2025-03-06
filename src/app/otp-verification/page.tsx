@@ -10,17 +10,19 @@ import {
   SelectItem,
   SelectTrigger,
 } from "@/components/ui/select";
-import { Calendar } from "@/components/ui/calendar";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { format } from "date-fns";
+import { format, startOfDay, endOfDay, isWithinInterval } from "date-fns";
 import PageHeader from "@/components/ui/PageHeader";
 import { useRouter } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ClockIcon } from "@heroicons/react/24/outline";
+import { CalendarIcon } from "@heroicons/react/24/outline";
+import { cn } from "@/lib/utils";
+import { DayPicker } from "react-day-picker";
 
 interface VerificationData {
   id: string;
@@ -70,8 +72,267 @@ interface ChildRowData {
 // Updated interface for tracker status
 interface TrackerStatusItem {
   status: string;
-  timestamp?: string;
+  createdAt: string;      // When the status was first created
+  lastUpdatedAt: string;  // When the status was last changed
 }
+
+// Add DateRange interface at the top of the file with other interfaces
+interface DateRange {
+  from: Date | undefined;
+  to: Date | undefined;
+}
+
+// Create a custom CalendarWithRange component at the top of the file after imports
+// This ensures the date range is properly styled with start, middle, and end dates
+function CalendarWithRange({
+  className,
+  dateRange,
+  setDateRange,
+}: {
+  className?: string;
+  dateRange: DateRange;
+  setDateRange: (dateRange: DateRange) => void;
+}) {
+  // Add state to control the currently displayed month
+  const [currentMonth, setCurrentMonth] = useState<Date>(
+    dateRange.from || new Date()
+  );
+
+  // Handle month change to only advance by one month at a time
+  const handleMonthChange = (month: Date) => {
+    setCurrentMonth(month);
+  };
+  
+  // Calculate the next month for display purposes
+  const nextMonth = new Date(currentMonth);
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+  return (
+    <div className="calendar-wrapper">
+      <div className="flex justify-between items-center mb-2 p-1 bg-indigo-50 rounded-lg">
+        <span className="text-sm font-semibold text-indigo-800 px-2">
+          {format(currentMonth, 'MMMM yyyy')} — {format(nextMonth, 'MMMM yyyy')}
+        </span>
+        <div className="flex space-x-1">
+          <button 
+            onClick={() => {
+              const prevMonth = new Date(currentMonth);
+              prevMonth.setMonth(prevMonth.getMonth() - 1);
+              setCurrentMonth(prevMonth);
+            }}
+            className="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-600 rounded-md text-xs flex items-center border border-indigo-200"
+            aria-label="Previous month"
+          >
+            <span className="mr-1">←</span> Prev
+          </button>
+          <button 
+            onClick={() => {
+              const nextMonth = new Date(currentMonth);
+              nextMonth.setMonth(nextMonth.getMonth() + 1);
+              setCurrentMonth(nextMonth);
+            }}
+            className="px-2 py-1 bg-white hover:bg-indigo-100 text-indigo-600 rounded-md text-xs flex items-center border border-indigo-200"
+            aria-label="Next month"
+          >
+            Next <span className="ml-1">→</span>
+          </button>
+        </div>
+      </div>
+      <DayPicker
+        mode="range"
+        defaultMonth={currentMonth}
+        month={currentMonth}
+        onMonthChange={handleMonthChange}
+        selected={{
+          from: dateRange.from,
+          to: dateRange.to,
+        }}
+        onSelect={(range) => {
+          if (range?.from) {
+            setDateRange({ 
+              from: range.from, 
+              to: range.to || range.from 
+            });
+          } else {
+            setDateRange({ from: undefined, to: undefined });
+          }
+        }}
+        numberOfMonths={2}
+        pagedNavigation={false}
+        showOutsideDays={true}
+        fixedWeeks={true}
+        hideNavigation={true}
+        className={cn("rounded-md p-3", className)}
+        modifiers={{
+          range_start: dateRange.from,
+          range_end: dateRange.to,
+          range_middle: dateRange.from && dateRange.to ? {
+            after: dateRange.from,
+            before: dateRange.to
+          } : undefined
+        }}
+        modifiersClassNames={{
+          range_start: "rdp-day_range_start",
+          range_end: "rdp-day_range_end",
+          range_middle: "rdp-day_range_middle",
+          selected: "rdp-day_selected"
+        }}
+      />
+      
+      {/* Display range information if a range is selected */}
+      {dateRange.from && dateRange.to && (
+        <div className="mt-2 p-2 bg-indigo-50 rounded-md border border-indigo-100 text-sm">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-1">
+              <div className="w-3 h-3 bg-indigo-600 rounded-full"></div>
+              <span className="text-indigo-900 font-medium">Selected Date Range:</span>
+            </div>
+            <div className="text-indigo-700 font-bold">
+              {format(dateRange.from, "MMM d")} - {format(dateRange.to, "MMM d, yyyy")}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Add a style tag at the top of the component to ensure date range is properly styled
+const CustomDateRangeStyles = () => {
+  return (
+    <style jsx global>{`
+      /* Calendar container */
+      .calendar-wrapper .rdp {
+        --rdp-accent-color: #4f46e5;
+        --rdp-background-color: #c7d2fe;
+        margin: 0;
+      }
+      
+      /* Hide default calendar navigation and caption */
+      .rdp-caption {
+        display: none !important;
+      }
+      
+      /* Hide the default navigation bar completely */
+      .rdp-nav {
+        display: none !important;
+      }
+      
+      /* Make months display side by side */
+      .rdp-months {
+        display: flex !important;
+        flex-direction: row !important;
+        justify-content: space-between !important;
+        gap: 1rem !important;
+      }
+      
+      /* Ensure each month has proper width */
+      .rdp-month {
+        margin: 0 !important;
+        max-width: calc(50% - 0.5rem) !important;
+      }
+      
+      /* Date Range Picker Styles */
+      .rdp-day_range_start,
+      .rdp-day_range_end {
+        background-color: #4f46e5 !important;
+        color: white !important;
+        font-weight: bold !important;
+        position: relative;
+        z-index: 2;
+      }
+      
+      .rdp-day_range_start {
+        border-top-left-radius: 0.375rem !important;
+        border-bottom-left-radius: 0.375rem !important;
+      }
+      
+      .rdp-day_range_end {
+        border-top-right-radius: 0.375rem !important;
+        border-bottom-right-radius: 0.375rem !important;
+      }
+      
+      .rdp-day_range_middle {
+        background-color: #c7d2fe !important;
+        color: #312e81 !important;
+        position: relative;
+      }
+      
+      /* Add connecting line for range */
+      .rdp-day_range_middle::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #c7d2fe;
+        z-index: -1;
+      }
+      
+      .rdp-day_range_middle:hover {
+        background-color: #a5b4fc !important;
+        color: #312e81 !important;
+      }
+      
+      .rdp-day_selected {
+        background-color: #4f46e5 !important;
+        color: white !important;
+      }
+      
+      .rdp-day_today {
+        background-color: #ffedd5 !important;
+        color: #9a3412 !important;
+        border: 1px solid #fdba74 !important;
+        font-weight: bold !important;
+      }
+      
+      /* Navigation button styles */
+      .rdp-nav_button {
+        background-color: #eef2ff;
+        color: #4f46e5;
+        border-radius: 0.375rem;
+        padding: 0.25rem;
+        margin: 0 0.25rem;
+        width: 2rem;
+        height: 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s ease;
+      }
+      
+      .rdp-nav_button:hover {
+        background-color: #4f46e5;
+        color: white;
+      }
+      
+      /* Add visual indicator for navigation direction */
+      .rdp-nav_button_previous::before {
+        content: "←";
+        font-size: 1rem;
+        font-weight: bold;
+      }
+      
+      .rdp-nav_button_next::before {
+        content: "→";
+        font-size: 1rem;
+        font-weight: bold;
+      }
+      
+      /* Make calendar responsive */
+      @media (max-width: 768px) {
+        .rdp-months {
+          flex-direction: column !important;
+        }
+        
+        .rdp-month {
+          max-width: 100% !important;
+        }
+      }
+    `}</style>
+  );
+};
 
 export default function OtpVerificationPage() {
   const [isLoading, setIsLoading] = useState(true);
@@ -81,7 +342,11 @@ export default function OtpVerificationPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [trackerStatus, setTrackerStatus] = useState<Record<string, TrackerStatusItem>>({});
   const [isSavingTracker, setIsSavingTracker] = useState(false);
-  const [dateFilter, setDateFilter] = useState<Date | undefined>(undefined);
+  // Replace single date filter with date range
+  const [dateRange, setDateRange] = useState<DateRange>({
+    from: undefined,
+    to: undefined
+  });
   const [sortBy, setSortBy] = useState<string>("none");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [confirmingChildId, setConfirmingChildId] = useState<string | null>(null);
@@ -328,9 +593,22 @@ export default function OtpVerificationPage() {
 
     // Exclude specific phone numbers
     const excludePhoneNumbers = [
-      "9426052435",
-      "9571209434",
-      "9997386442",
+      "9426052435",  //Aditya
+      "9571209434",  // yash
+      "9997386442",  //akshit
+      "8235445537",  //saksham
+      "9426042435",  
+      "9560593600",
+      "9876577271",
+      "9581209434",
+      "8348773838",
+      "9517209434",
+      "9811606576",
+      "8778757518",
+      "9813181011",
+      "9997386642",
+      "9571206434",
+
     ];
     filtered = filtered.filter(
       (item) => !excludePhoneNumbers.includes(item.phoneNumber)
@@ -366,9 +644,20 @@ export default function OtpVerificationPage() {
     }
 
     // Apply date filter
-    if (dateFilter) {
-      const selectedDate = format(dateFilter, "dd/MM/yyyy");
-      filtered = filtered.filter((item) => item.workshopDate === selectedDate);
+    if (dateRange.from && dateRange.to) {
+      const fromDate = startOfDay(dateRange.from);
+      const toDate = endOfDay(dateRange.to);
+      
+      filtered = filtered.filter((item) => {
+        try {
+          // Convert the createdAt timestamp (transaction date) to a Date object
+          const itemDate = new Date(item.createdAt);
+          return isWithinInterval(itemDate, { start: fromDate, end: toDate });
+        } catch {
+          console.error("Error parsing date:", item.createdAt);
+          return false;
+        }
+      });
     }
 
     // Apply sorting
@@ -397,35 +686,45 @@ export default function OtpVerificationPage() {
     }
 
     return filtered;
-  }, [otpData, statusFilter, searchQuery, dateFilter, sortBy, sortDirection]);
+  }, [otpData, statusFilter, searchQuery, dateRange, sortBy, sortDirection]);
 
   // Change let to const
   const childRows = transformDataToChildRows(filteredData);
 
   // Modify the handleTrackerChange function
   const handleTrackerChange = (childId: string, status: string) => {
+    // If the status is already "done", don't allow changes
+    if (trackerStatus[childId]?.status === "done") {
+      return; // Prevent any status changes once marked as done
+    }
+    
     // If user is trying to mark as done, show confirmation first
     if (status === "done") {
       setConfirmingChildId(childId);
     } else {
-      // For other status changes, update immediately
+      // For other status changes (only to "pending"), update normally
       setTrackerStatus((prev) => ({
         ...prev,
         [childId]: { 
           status: status, 
-          timestamp: status === "done" ? new Date().toISOString() : undefined 
+          createdAt: prev[childId]?.createdAt || new Date().toISOString(),
+          lastUpdatedAt: new Date().toISOString()
         },
       }));
     }
   };
 
-  // Function to confirm and finalize status change
+  // Function to confirm and finalize status change to "done"
   const confirmStatusChange = (childId: string) => {
+    // Record the timestamp when marked as done - this is permanent
+    const timestamp = new Date().toISOString();
+    
     setTrackerStatus((prev) => ({
       ...prev,
       [childId]: { 
         status: "done", 
-        timestamp: new Date().toISOString() 
+        createdAt: timestamp, // Record when it was marked as done
+        lastUpdatedAt: timestamp // Same as createdAt for "done" status
       },
     }));
     setConfirmingChildId(null);
@@ -449,9 +748,15 @@ export default function OtpVerificationPage() {
     }
   };
 
+  // For showing when the call was made
+  const formatCallTime = (trackerItem: TrackerStatusItem) => {
+    return formatTimestamp(trackerItem.createdAt); 
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <PageHeader pageName="OTP Verification" />
+      <CustomDateRangeStyles />
       <div className="flex-1 p-6 transition-all duration-300 ease-in-out">
         <div className="flex flex-col w-full">
           <div className="mb-6">
@@ -464,161 +769,199 @@ export default function OtpVerificationPage() {
           </div>
 
           <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex flex-col md:flex-row md:justify-between mb-6 gap-4">
-              <div className="flex flex-col md:flex-row gap-2 items-start md:items-center flex-wrap">
-                <Select
-                  value={statusFilter}
-                  onValueChange={(value) => setStatusFilter(value)}
-                >
-                  <SelectTrigger className="w-[180px]">
-                    <div className="flex items-center">
-                      {statusFilter === "all" ? (
-                        <span>Filter Status</span>
-                      ) : (
-                        <span className="flex items-center gap-1">
-                          <span className="text-primary">Status:</span>
-                          {statusFilter === "verified"
-                            ? "OTP Verified"
-                            : statusFilter === "pending"
-                            ? "OTP Pending"
-                            : statusFilter === "payment_confirmed"
-                            ? "Payment Confirmed"
-                            : statusFilter === "payment_pending"
-                            ? "Payment Pending"
-                            : "Payment Initiated"}
-                        </span>
-                      )}
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Statuses</SelectItem>
-                    <SelectItem value="verified">OTP Verified</SelectItem>
-                    <SelectItem value="pending">OTP Pending</SelectItem>
-                    <SelectItem value="payment_confirmed">
-                      Payment Confirmed
-                    </SelectItem>
-                    <SelectItem value="payment_pending">
-                      Payment Pending
-                    </SelectItem>
-                    <SelectItem value="payment_initiated">
-                      Payment Initiated
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+            <div className="flex flex-col md:flex-row gap-4 mb-6">
+              <div className="flex flex-col md:flex-row gap-2 items-start md:items-center flex-wrap md:mr-auto">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Select
+                    value={statusFilter}
+                    onValueChange={(value) => setStatusFilter(value)}
+                  >
+                    <SelectTrigger className="w-[180px]">
+                      <div className="flex items-center">
+                        {statusFilter === "all" ? (
+                          <span>Filter Status</span>
+                        ) : (
+                          <span className="flex items-center gap-1">
+                            <span className="text-primary">Status:</span>
+                            {statusFilter === "verified"
+                              ? "OTP Verified"
+                              : statusFilter === "pending"
+                              ? "OTP Pending"
+                              : statusFilter === "payment_confirmed"
+                              ? "Payment Confirmed"
+                              : statusFilter === "payment_pending"
+                              ? "Payment Pending"
+                              : "Payment Initiated"}
+                          </span>
+                        )}
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      <SelectItem value="verified">OTP Verified</SelectItem>
+                      <SelectItem value="pending">OTP Pending</SelectItem>
+                      <SelectItem value="payment_confirmed">
+                        Payment Confirmed
+                      </SelectItem>
+                      <SelectItem value="payment_pending">
+                        Payment Pending
+                      </SelectItem>
+                      <SelectItem value="payment_initiated">
+                        Payment Initiated
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
 
-                <Popover>
-                  <PopoverTrigger asChild>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={`w-[220px] justify-start ${dateRange.from && dateRange.to ? 'border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100' : ''}`}
+                      >
+                        {dateRange.from && dateRange.to ? (
+                          <div className="flex items-center">
+                            <CalendarIcon className="mr-2 h-4 w-4 text-indigo-600" />
+                            <span>
+                              {format(dateRange.from, "MMM d")} - {format(dateRange.to, "MMM d, yyyy")}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center">
+                            <CalendarIcon className="mr-2 h-4 w-4" />
+                            <div className="flex flex-col items-start text-left">
+                              <span className="text-xs text-gray-500">Transaction Date</span>
+                              <span>Select Date Range</span>
+                            </div>
+                          </div>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent 
+                      className="w-auto sm:min-w-[500px] md:min-w-[600px] lg:min-w-[700px] p-4 border-2 border-indigo-200 bg-white shadow-lg shadow-indigo-100/40 rounded-xl" 
+                      align="start"
+                      sideOffset={5}
+                    >
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <h4 className="font-medium text-sm text-indigo-900">Select Transaction Date Range</h4>
+                          <p className="text-xs text-indigo-600">
+                            Filter bookings by when they were created
+                          </p>
+                        </div>
+                        <div className="flex flex-col">
+                          <div className="grid gap-2">
+                            <div className="bg-white p-1 rounded-lg border border-indigo-100 overflow-visible">
+                              <CalendarWithRange
+                                className={`${dateRange.from && dateRange.to ? 'border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100' : ''}`}
+                                dateRange={dateRange}
+                                setDateRange={setDateRange}
+                              />
+                            </div>
+                          </div>
+                          {dateRange.from && dateRange.to && (
+                            <div className="flex justify-between items-center mt-4 bg-indigo-50 p-2 rounded-md border border-indigo-100">
+                              <div className="text-sm text-indigo-900">
+                                <span className="font-medium">Selected: </span>
+                                <span className="font-bold">{format(dateRange.from, "MMM d")} - {format(dateRange.to, "MMM d, yyyy")}</span>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="border-indigo-200 hover:bg-indigo-100 text-indigo-700"
+                                onClick={() => {
+                                  setDateRange({ from: undefined, to: undefined });
+                                }}
+                              >
+                                Clear
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Select
+                    value={sortBy}
+                    onValueChange={(value) => setSortBy(value)}
+                  >
+                    <SelectTrigger className="w-[180px]">
+                      <div className="flex items-center gap-2">
+                        {sortBy === "none" ? (
+                          <span>Sort by...</span>
+                        ) : (
+                          <>
+                            <span>
+                              Sort by:{" "}
+                              {sortBy === "date"
+                                ? "Workshop Date"
+                                : "Workshop Time"}
+                            </span>
+                            <span className="text-xs bg-primary/10 text-primary px-1 rounded">
+                              {sortDirection === "asc" ? "↑ A-Z" : "↓ Z-A"}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">No Sorting</SelectItem>
+                      <SelectItem value="date">Workshop Date</SelectItem>
+                      <SelectItem value="time">Workshop Time</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {sortBy !== "none" && (
                     <Button
                       variant="outline"
-                      className="w-[180px] justify-start"
+                      size="default"
+                      onClick={() =>
+                        setSortDirection(
+                          sortDirection === "asc" ? "desc" : "asc"
+                        )
+                      }
+                      className="w-[100px] flex justify-between items-center"
                     >
-                      {dateFilter ? (
-                        format(dateFilter, "PPP")
-                      ) : (
-                        <span>Filter by Date</span>
-                      )}
+                      {sortDirection === "asc" ? "Ascending" : "Descending"}
+                      <span className="text-xs">
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                      </span>
                     </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0" align="start">
-                    <Calendar
-                      mode="single"
-                      selected={dateFilter}
-                      onSelect={setDateFilter}
-                      initialFocus
-                    />
-                    {dateFilter && (
-                      <div className="p-2 border-t border-gray-200">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setDateFilter(undefined)}
-                          className="w-full"
-                        >
-                          Clear Date
-                        </Button>
-                      </div>
-                    )}
-                  </PopoverContent>
-                </Popover>
-
-                <Select
-                  value={sortBy}
-                  onValueChange={(value) => setSortBy(value)}
-                >
-                  <SelectTrigger className="w-[220px]">
-                    <div className="flex items-center gap-2">
-                      {sortBy === "none" ? (
-                        <span>Sort by...</span>
-                      ) : (
-                        <>
-                          <span>
-                            Sort by:{" "}
-                            {sortBy === "date"
-                              ? "Workshop Date"
-                              : "Workshop Time"}
-                          </span>
-                          <span className="text-xs bg-primary/10 text-primary px-1 rounded">
-                            {sortDirection === "asc" ? "↑ A-Z" : "↓ Z-A"}
-                          </span>
-                        </>
-                      )}
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No Sorting</SelectItem>
-                    <SelectItem value="date">Sort by Workshop Date</SelectItem>
-                    <SelectItem value="time">Sort by Workshop Time</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {sortBy !== "none" && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() =>
-                      setSortDirection((prev) =>
-                        prev === "asc" ? "desc" : "asc"
-                      )
-                    }
-                    className="h-10 w-10 p-0"
-                    title={`Change to ${
-                      sortDirection === "asc" ? "descending" : "ascending"
-                    } order`}
-                  >
-                    {sortDirection === "asc" ? "↑" : "↓"}
-                  </Button>
-                )}
-
-                <Button
-                  variant="outline"
-                  onClick={fetchOtpVerificationData}
-                  className="h-10"
-                  title="Refresh data"
-                >
-                  Refresh
-                </Button>
+                  )}
+                </div>
               </div>
 
-              <div className="flex items-center space-x-2">
+              <div className="w-full md:w-auto md:self-start">
                 <Input
-                  placeholder="Search by name or phone"
-                  className="w-full md:w-[250px]"
+                  placeholder="Search by name, phone, transaction ID"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full md:w-[320px]"
                 />
-                <Button onClick={() => setSearchQuery("")}>Clear</Button>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-4">
-              {dateFilter && (
-                <Badge variant="outline" className="flex items-center gap-1">
-                  Date: {format(dateFilter, "PPP")}
+              {dateRange.from && dateRange.to && (
+                <Badge variant="outline" className="flex items-center gap-1 bg-indigo-100 border-indigo-300 text-indigo-800">
+                  <CalendarIcon className="h-3 w-3 mr-1 text-indigo-600" />
+                  Transaction Date: 
+                  <span className="font-semibold ml-1">
+                    {format(dateRange.from, "MMM d")}
+                  </span>
+                  <span className="mx-1">-</span>
+                  <span className="font-semibold">
+                    {format(dateRange.to, "MMM d, yyyy")}
+                  </span>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-4 w-4 p-0 text-gray-500 hover:text-gray-900"
-                    onClick={() => setDateFilter(undefined)}
+                    className="h-4 w-4 p-0 ml-1 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-200"
+                    onClick={() => {
+                      setDateRange({ from: undefined, to: undefined });
+                    }}
                   >
                     ×
                   </Button>
@@ -652,8 +995,8 @@ export default function OtpVerificationPage() {
               <div className="text-center py-8">Loading OTP data...</div>
             ) : (
               <div className="overflow-hidden border border-gray-200 rounded-md w-full transition-all duration-300 ease-in-out">
-                <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto relative">
-                  <table className="min-w-full divide-y divide-gray-200 table-fixed">
+                <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto relative scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-100">
+                  <table className="w-full divide-y divide-gray-200" style={{ paddingRight: "24px", minWidth: "1400px" }}>
                     <thead className="bg-gray-50 sticky top-0 z-10">
                       <tr>
                         <th className="sticky left-0 z-20 bg-gray-50 px-2 py-1 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[40px]">
@@ -662,40 +1005,40 @@ export default function OtpVerificationPage() {
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[130px]">
                           Transaction ID
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[80px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[110px]">
                           Phone
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[100px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[120px]">
                           Trans. Date/Time
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[120px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[140px]">
                           Child Name
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[35px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[50px]">
                           Age
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[70px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[80px]">
                           OTP
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[90px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[120px]">
                           Welcome Call
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[90px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[110px]">
                           Workshop Date
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[70px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[110px]">
                           Workshop Time
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[130px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[150px]">
                           Workshop Theme
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[70px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[80px]">
                           Amount
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[90px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[120px]">
                           Payment Status
                         </th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[90px]">
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[140px] pr-6">
                           Payment Gateway
                         </th>
                       </tr>
@@ -771,14 +1114,14 @@ export default function OtpVerificationPage() {
                                     onValueChange={(value) => handleTrackerChange(child.id, value)}
                                   >
                                     <SelectTrigger
-                                      className={`h-8 ${
+                                      className={`h-8 w-full min-w-[90px] ${
                                         trackerStatus[child.id]?.status === "done"
                                           ? "border-green-500 bg-green-50"
                                           : "border-yellow-500 bg-yellow-50"
                                       }`}
                                       disabled={trackerStatus[child.id]?.status === "done" || isSavingTracker}
                                     >
-                                      <div className="flex items-center">
+                                      <div className="flex items-center justify-center">
                                         {trackerStatus[child.id]?.status === "done" ? (
                                           <span className="text-green-600 font-medium">
                                             Done
@@ -806,7 +1149,7 @@ export default function OtpVerificationPage() {
                                   {isSavingTracker && (
                                     <div className="ml-2 h-3 w-3 animate-pulse bg-blue-500 rounded-full" />
                                   )}
-                                  {trackerStatus[child.id]?.status === "done" && trackerStatus[child.id]?.timestamp && (
+                                  {trackerStatus[child.id]?.status === "done" && trackerStatus[child.id]?.createdAt && (
                                     <TooltipProvider>
                                       <Tooltip>
                                         <TooltipTrigger asChild>
@@ -819,7 +1162,7 @@ export default function OtpVerificationPage() {
                                             Marked as done on:
                                             <br />
                                             <span className="font-medium">
-                                              {formatTimestamp(trackerStatus[child.id]?.timestamp)}
+                                              {formatCallTime(trackerStatus[child.id])}
                                             </span>
                                           </p>
                                         </TooltipContent>
@@ -867,8 +1210,8 @@ export default function OtpVerificationPage() {
                                   </Badge>
                                 )}
                               </td>
-                              <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">
-                                {child.paymentGateway}
+                              <td className="px-3 py-2 pr-6 whitespace-nowrap text-sm text-gray-900">
+                                {child.paymentGateway || "-"}
                               </td>
                             </tr>
                           );
@@ -876,7 +1219,7 @@ export default function OtpVerificationPage() {
                       ) : (
                         <tr>
                           <td
-                            colSpan={13}
+                            colSpan={14}
                             className="px-6 py-4 text-center text-gray-500"
                           >
                             No OTP verification data found

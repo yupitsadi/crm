@@ -91,14 +91,33 @@ export async function POST(req: NextRequest) {
         ? undefined 
         : (statusData as TrackerStatusItem).timestamp;
       
+      // Check if there's an existing record
+      const existingRecord = await WelcomeCall.findOne({ childId });
+      
+      // If the record exists and status is already "done", don't update it
+      if (existingRecord && existingRecord.status === 'done') {
+        return; // Skip update for done statuses
+      }
+
+      // For new records or changing status to "done", save the current timestamp
+      const updateData: { 
+        status: string;
+        updatedBy: string;
+        updatedAt?: Date;
+      } = { 
+        status,
+        updatedBy: userId
+      };
+      
+      // Only set updatedAt if it's not already set (for first time saving)
+      if (!existingRecord || existingRecord.status !== 'done') {
+        updateData.updatedAt = timestamp ? new Date(timestamp) : new Date();
+      }
+      
       // Use findOneAndUpdate with upsert to create if doesn't exist
       await WelcomeCall.findOneAndUpdate(
         { childId },
-        { 
-          status, 
-          updatedBy: userId,
-          updatedAt: timestamp ? new Date(timestamp) : new Date()
-        },
+        updateData,
         { upsert: true, new: true }
       );
     });
