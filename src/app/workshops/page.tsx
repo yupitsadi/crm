@@ -276,7 +276,7 @@ export default function WorkshopsPage() {
                     <div className="grid grid-cols-2 gap-2 mb-3">
                       <div>
                         <p className="text-xs text-gray-500">Duration</p>
-                        <p className="font-medium">{workshop.duration} mins</p>
+                        <p className="font-medium">{workshop.duration} hr</p>
                       </div>
                       <div>
                         <p className="text-xs text-gray-500">Price</p>

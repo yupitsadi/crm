@@ -1,9 +1,7 @@
 import './globals.css';
 import type { Metadata } from 'next';
 import { Geist, Geist_Mono } from 'next/font/google';
-import Sidebar from '@/components/navigation/Sidebar';
 import AuthWrapper from '@/components/auth/AuthWrapper';
-import SidebarLayoutEffect from '@/components/navigation/SidebarLayoutEffect';
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -31,13 +29,8 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
         <AuthWrapper>
-          <div className="flex relative">
-            <Sidebar />
-            <SidebarLayoutEffect />
-            <div id="main-content" className="min-h-screen w-full">
-              {children}
-            </div>
-          </div>
+          {/* The Login page is rendered without sidebar layout */}
+          {children}
         </AuthWrapper>
       </body>
     </html>

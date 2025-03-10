@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { 
   HomeIcon, 
   UsersIcon,
@@ -15,6 +15,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon
 } from '@heroicons/react/24/outline';
+import { useAuth } from '../auth/AuthWrapper';
 
 interface NavItem {
   name: string;
@@ -24,9 +25,9 @@ interface NavItem {
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
+  const { logout } = useAuth();
   
   // Check authentication status on mount and when pathname changes
   useEffect(() => {
@@ -86,10 +87,8 @@ export default function Sidebar() {
   
   // Handle logout
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    setIsAuthenticated(false);
-    router.push('/login');
+    // Use the logout function from auth context
+    logout();
   };
   
   // Handle navigation and collapse sidebar on small screens

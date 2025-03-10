@@ -5,7 +5,7 @@ import { getUserModel } from '@/models/User';
 export async function POST(req: NextRequest) {
   try {
     // Parse request body
-    const { email, password } = await req.json();
+    const { email, password, rememberMe = false } = await req.json();
 
     // Get User model with CRM database connection
     const User = await getUserModel();
@@ -30,9 +30,14 @@ export async function POST(req: NextRequest) {
 
     // Generate JWT token
     const token = auth.generateToken(user);
+    
+    // Generate refresh token (longer expiry)
+    const refreshToken = auth.generateRefreshToken(user);
 
-    return NextResponse.json({
+    // Set response
+    const response = {
       token,
+      refreshToken,
       user: {
         id: user._id,
         email: user.email,
@@ -40,7 +45,10 @@ export async function POST(req: NextRequest) {
         firstName: user.firstName,
         lastName: user.lastName,
       },
-    });
+      expiresIn: rememberMe ? '7d' : '24h' // Longer session if remember me is checked
+    };
+
+    return NextResponse.json(response);
   } catch (error: unknown) {
     const errorMessage = error instanceof Error 
       ? error.message 

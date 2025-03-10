@@ -137,7 +137,7 @@ export default function WorkshopList() {
                       {formatDate(workshop.date_of_workshop)}
                     </p>
                     <p className="text-xs text-gray-400">
-                      {workshop.duration} mins | ₹{workshop.rate}
+                      {workshop.duration} hours | ₹{workshop.rate}
                     </p>
                     {workshop.location && (
                       <p className="text-xs text-gray-400">
