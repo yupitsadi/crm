@@ -17,7 +17,6 @@ import {
 } from "@/components/ui/popover";
 import { format, startOfDay, endOfDay, isWithinInterval } from "date-fns";
 import PageHeader from "@/components/ui/PageHeader";
-import { useRouter } from "next/navigation";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ClockIcon } from "@heroicons/react/24/outline";
 import { CalendarIcon } from "@heroicons/react/24/outline";
@@ -67,6 +66,7 @@ interface ChildRowData {
   totalChildren: number;
   childIndex: number;
   transactionId: string;
+  workshopId?: string;
 }
 
 // Updated interface for tracker status
@@ -350,7 +350,8 @@ export default function OtpVerificationPage() {
   const [sortBy, setSortBy] = useState<string>("none");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [confirmingChildId, setConfirmingChildId] = useState<string | null>(null);
-  const router = useRouter();
+  const [workshopThemes, setWorkshopThemes] = useState<Record<string, string>>({});
+  // const router = useRouter(); // Commented out as it's currently unused
 
   // Memoize functions with useCallback
   const fetchTrackerStatus = useCallback(async () => {
@@ -444,19 +445,14 @@ export default function OtpVerificationPage() {
     }
   }, [trackerStatus]);
 
-  const fetchOtpVerificationData = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-
+  const fetchOtpData = useCallback(async () => {
     try {
       // Get the JWT token from local storage
       const token =
         localStorage.getItem("token") || sessionStorage.getItem("token");
 
       if (!token) {
-        setError("You must be logged in to view this page");
-        setIsLoading(false);
-        return;
+        throw new Error("Authentication token not found");
       }
 
       const response = await fetch("/api/otp-verification", {
@@ -465,40 +461,85 @@ export default function OtpVerificationPage() {
         },
       });
 
+      // Handle unauthorized response
       if (response.status === 401) {
-        setError(
-          "You are not authorized to view this page. Please login with admin or staff credentials."
-        );
-        setIsLoading(false);
-        // Optionally redirect to login page
-        setTimeout(() => router.push("/login"), 2000);
-        return;
+        throw new Error("Not authorized to access OTP data");
       }
 
       if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
+        throw new Error(`Server returned ${response.status}`);
       }
 
       const data = await response.json();
-      setOtpData(data.verifications || []);
-    } catch (err) {
-      console.error("Failed to fetch OTP verification data:", err);
-      if (err instanceof Error) {
-        setError(`Failed to load OTP verification data: ${err.message}`);
+      
+      if (data.verifications && Array.isArray(data.verifications)) {
+        const otpVerifications = data.verifications;
+        setOtpData(otpVerifications);
+        
+        // Extract unique workshop IDs to fetch themes
+        const workshopIds = new Set<string>();
+        otpVerifications.forEach((verification: VerificationData) => {
+          if (verification.workshopId) {
+            workshopIds.add(verification.workshopId);
+          }
+        });
+        
+        // Fetch workshop themes for each workshop ID
+        fetchWorkshopThemes(Array.from(workshopIds));
       } else {
-        setError(
-          "Failed to load OTP verification data. Please try again later."
-        );
+        throw new Error("Invalid response format from API");
       }
+    } catch (err: unknown) {
+      const errorMessage =
+        err instanceof Error ? err.message : "Failed to fetch OTP data";
+      setError(errorMessage);
+      console.error("Error in fetchOtpData:", err);
     } finally {
       setIsLoading(false);
     }
-  }, [router]);
+  }, []);
+  
+  // Function to fetch workshop themes by IDs
+  const fetchWorkshopThemes = async (workshopIds: string[]) => {
+    if (!workshopIds.length) return;
+    
+    try {
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+      if (!token) return;
+      
+      // For each workshop ID, fetch workshop details
+      const themes: Record<string, string> = {};
+      
+      const promises = workshopIds.map(async (id) => {
+        try {
+          const response = await fetch(`/api/workshop?id=${id}`, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+          });
+          
+          if (response.ok) {
+            const data = await response.json();
+            if (data.success && data.workshop) {
+              themes[id] = data.workshop.theme;
+            }
+          }
+        } catch (error) {
+          console.error(`Error fetching theme for workshop ${id}:`, error);
+        }
+      });
+      
+      await Promise.all(promises);
+      setWorkshopThemes(themes);
+    } catch (error) {
+      console.error("Error fetching workshop themes:", error);
+    }
+  };
 
   useEffect(() => {
-    fetchOtpVerificationData();
+    fetchOtpData();
     fetchTrackerStatus();
-  }, [fetchOtpVerificationData, fetchTrackerStatus]);
+  }, [fetchOtpData, fetchTrackerStatus]);
 
   // Save tracker status to server (debounced)
   useEffect(() => {
@@ -580,6 +621,7 @@ export default function OtpVerificationPage() {
           totalChildren: childNames.length,
           childIndex: idx,
           transactionId: item.transactionId || "N/A",
+          workshopId: item.workshopId || undefined,
         });
       });
     });
@@ -1178,7 +1220,18 @@ export default function OtpVerificationPage() {
                                 {child.workshopTime}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">
-                                {child.productInfo}
+                                {child.workshopId ? (
+                                  <a 
+                                    href={`https://workshops.geniuslabs.live/${child.workshopId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                                  >
+                                    {workshopThemes[child.workshopId] || child.productInfo}
+                                  </a>
+                                ) : (
+                                  child.productInfo
+                                )}
                               </td>
                               <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">
                                 ₹{child.amount.toLocaleString("en-IN")}

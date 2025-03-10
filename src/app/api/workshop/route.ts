@@ -1,7 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { workshop as WorkshopModel } from '@/models/workshop';
 import { connectToDatabase } from '@/lib/db';
+import mongoose from 'mongoose';
 // import { authMiddleware } from '@/lib/auth';
+
+// Define a type for the workshop document
+interface WorkshopDocument {
+  _id: mongoose.Types.ObjectId | string | { $oid: string };
+  theme: string;
+  date_of_workshop: string;
+  duration: number;
+  rate: number;
+  video_url: string;
+  description: Array<{
+    type: string;
+    content: string;
+    subpoints?: string[];
+  }>;
+  location: {
+    address: string;
+    city: string;
+    country: string;
+  };
+  likes: number;
+  rating: number;
+  children_enrolled: number;
+  kit_name: string;
+  meta: string;
+  workshop_url: string;
+  date?: {
+    time_slots: string[];
+    list_datetime: Date | string;
+  };
+  [key: string]: unknown; // For any additional fields
+}
 
 // Sample workshop data fallback - same as workshop_details
 function getSampleWorkshops() {
@@ -124,12 +156,16 @@ function getSampleWorkshops() {
 }
 
 // GET: Fetch all workshops
-export async function GET() {
+export async function GET(req: NextRequest) {
   // Use a boolean to track successful database operation
   let usingFallbackData = false;
   
   try {
     console.log('Starting to fetch workshops...');
+    
+    // Check if we're requesting a single workshop by ID
+    const { searchParams } = new URL(req.url);
+    const workshopId = searchParams.get('id');
     
     try {
       console.log('Connecting to database to fetch workshops...');
@@ -142,41 +178,118 @@ export async function GET() {
       
       console.log('Database connection established.');
       
-      // Add a timeout to the query
+      // Define query options with increased timeout
       const queryOptions = { 
         maxTimeMS: 30000, // 30 seconds timeout
       };
       
       console.log('Executing query to fetch workshops...');
       
-      // Try a direct approach to query the collection
-      if (connection.db) {
-        console.log('Database name:', connection.db.databaseName);
-        
-        // Use the raw collection directly for better performance
+      // If workshopId is provided, fetch just that workshop
+      if (workshopId) {
+        console.log(`Fetching single workshop with ID: ${workshopId}`);
         try {
-          const rawCollection = connection.db.collection('workshop_details');
-          const workshopsFromCollection = await rawCollection.find({}).toArray();
-          console.log(`Successfully fetched ${workshopsFromCollection.length} workshops directly from collection`);
+          // Try to use the raw collection first
+          if (connection.db) {
+            try {
+              console.log('Attempting to fetch from raw collection...');
+              const rawCollection = connection.db.collection('workshop_details');
+              const workshop = await rawCollection.findOne({ _id: new mongoose.Types.ObjectId(workshopId) });
+              
+              if (workshop) {
+                console.log('Found workshop by ID using raw collection');
+                return NextResponse.json({ 
+                  success: true, 
+                  workshop
+                });
+              }
+            } catch (rawError) {
+              console.error('Error with raw collection access:', rawError);
+              // Continue to model approach
+            }
+          }
           
-          if (workshopsFromCollection.length > 0) {
+          // Fall back to model
+          console.log('Falling back to Mongoose model with explicit collection...');
+          const workshop = await WorkshopModel.findById(workshopId, null, queryOptions);
+          
+          if (workshop) {
+            console.log('Found workshop by ID');
             return NextResponse.json({ 
               success: true, 
-              workshops: workshopsFromCollection
+              workshop
             });
+          } else {
+            console.log(`Workshop with ID ${workshopId} not found`);
+            // Try to find the workshop in sample data
+            const sampleWorkshops = getSampleWorkshops();
+            const sampleWorkshop = sampleWorkshops.find(w => {
+              // Handle different MongoDB ID formats
+              let wId: string;
+              if (typeof w._id === 'string') {
+                wId = w._id;
+              } else if (w._id && typeof w._id === 'object') {
+                // Handle MongoDB extended JSON format with $oid field
+                const idObj = w._id as Record<string, unknown>;
+                if (idObj.$oid) {
+                  wId = String(idObj.$oid);
+                } else {
+                  wId = String(w._id);
+                }
+              } else {
+                wId = String(w._id);
+              }
+              return wId === workshopId;
+            });
+            
+            if (sampleWorkshop) {
+              return NextResponse.json({ 
+                success: true, 
+                workshop: sampleWorkshop,
+                isUsingFallbackData: true
+              });
+            }
+            
+            return NextResponse.json({ 
+              success: false, 
+              error: 'Workshop not found'
+            }, { status: 404 });
           }
-        } catch (directError) {
-          console.error('Error with direct collection access:', directError);
-          // Continue to model approach
+        } catch (error) {
+          console.error(`Error fetching workshop by ID ${workshopId}:`, error);
+          throw error;
         }
       }
       
-      // Fallback to using the model
-      console.log('Trying to query using model...');
+      // If no specific ID, fetch all workshops as before
+      console.log('Fetching all workshops...');
+      let workshops: WorkshopDocument[] = [];
       
-      // Try with the Mongoose model
-      const workshops = await WorkshopModel.find({}, null, queryOptions).lean();
-      console.log(`Successfully fetched ${workshops.length} workshops using model`);
+      // Try to use the raw collection first
+      if (connection.db) {
+        try {
+          console.log('Attempting to fetch all workshops from raw collection...');
+          const rawCollection = connection.db.collection('workshop_details');
+          workshops = await rawCollection.find({}).toArray() as WorkshopDocument[];
+          
+          if (workshops && workshops.length > 0) {
+            console.log(`Found ${workshops.length} workshops using raw collection`);
+          } else {
+            console.log('No workshops found using raw collection');
+          }
+        } catch (rawError) {
+          console.error('Error with raw collection access:', rawError);
+          // Continue to model approach
+          workshops = [];
+        }
+      }
+      
+      // If raw collection failed, try with model
+      if (!workshops || workshops.length === 0) {
+        console.log('Falling back to Mongoose model...');
+        workshops = await WorkshopModel.find({}, null, queryOptions);
+        console.log(`Found ${workshops?.length || 0} workshops using model`);
+      }
       
       if (workshops && workshops.length > 0) {
         return NextResponse.json({ 
