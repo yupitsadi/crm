@@ -204,8 +204,8 @@ export default function PaymentTrackingPage() {
     fetchBookings();
   }, [fetchBookings]);
   
-  // Helper functions to format dates and extract values
-  const formatDate = (dateString: string | { $date: string }): string => {
+  // Helper functions to format dates and extract values - wrap in useCallback
+  const formatDate = useCallback((dateString: string | { $date: string }): string => {
     try {
       if (typeof dateString === 'object' && '$date' in dateString) {
         return format(new Date(dateString.$date), 'dd/MM/yyyy');
@@ -215,14 +215,14 @@ export default function PaymentTrackingPage() {
       console.error("Error formatting date:", e);
       return "Invalid Date";
     }
-  };
+  }, []);
   
-  const getObjectId = (id: string | { $oid: string }): string => {
+  const getObjectId = useCallback((id: string | { $oid: string }): string => {
     if (typeof id === 'object' && '$oid' in id) {
       return id.$oid;
     }
     return String(id);
-  };
+  }, []);
   
   // Transform booking data to child rows - wrap in useCallback
   const transformBookingsToChildRows = useCallback((bookings: BookingData[]): ChildRowData[] => {
@@ -266,7 +266,7 @@ export default function PaymentTrackingPage() {
     });
     
     return childRows;
-  }, [workshopThemes, formatDate, getObjectId]); // Add dependencies
+  }, [workshopThemes, formatDate, getObjectId]); // dependencies remain the same
   
   // Filtered and sorted child rows
   const filteredChildRows = useMemo(() => {

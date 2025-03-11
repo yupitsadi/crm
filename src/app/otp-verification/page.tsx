@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -342,6 +342,8 @@ export default function OtpVerificationPage() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [trackerStatus, setTrackerStatus] = useState<Record<string, TrackerStatusItem>>({});
   const [isSavingTracker, setIsSavingTracker] = useState(false);
+  // Add state for tracking the last refresh time
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   // Replace single date filter with date range
   const [dateRange, setDateRange] = useState<DateRange>({
     from: undefined,
@@ -351,6 +353,10 @@ export default function OtpVerificationPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [confirmingChildId, setConfirmingChildId] = useState<string | null>(null);
   const [workshopThemes, setWorkshopThemes] = useState<Record<string, string>>({});
+  // Add a ref to track when the tracker status was last cleaned
+  const lastCleanedRef = useRef<number>(Date.now());
+  // Add a ref to track the last save time
+  const lastSavedRef = useRef<number>(Date.now());
   // const router = useRouter(); // Commented out as it's currently unused
 
   // Memoize functions with useCallback
@@ -402,51 +408,52 @@ export default function OtpVerificationPage() {
     }
   }, []);
 
-  // Save tracker status to server
-  const saveTrackerStatus = useCallback(async () => {
+  // Function to fetch workshop themes by IDs - Define this BEFORE fetchOtpData
+  const fetchWorkshopThemes = useCallback(async (workshopIds: string[]) => {
+    if (!workshopIds.length) return;
+    
     try {
-      setIsSavingTracker(true);
-
-      // Always save to localStorage as backup
-      localStorage.setItem("otpTrackerStatus", JSON.stringify(trackerStatus));
-
-      // Get the JWT token from local storage
-      const token =
-        localStorage.getItem("token") || sessionStorage.getItem("token");
-
-      if (!token) {
-        console.error("Authentication token not found");
-        setIsSavingTracker(false);
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+      if (!token) return;
+      
+      // Only fetch themes for workshops we don't already have
+      const missingThemeIds = workshopIds.filter(id => !workshopThemes[id]);
+      
+      if (missingThemeIds.length === 0) {
+        console.log("All workshop themes already cached, skipping fetch");
         return;
       }
-
-      const response = await fetch("/api/tracker-status", {
-        method: "POST",
+      
+      console.log(`Fetching themes for ${missingThemeIds.length} workshops`);
+      
+      // Use the batch API instead of individual requests
+      const response = await fetch(`/api/workshop-themes?ids=${missingThemeIds.join(',')}`, {
         headers: {
-          "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ trackerStatus }),
       });
-
-      if (response.status === 401) {
-        console.error("Not authorized to save tracker status");
-        setIsSavingTracker(false);
-        return;
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.themes) {
+          setWorkshopThemes(prev => ({
+            ...prev,
+            ...data.themes
+          }));
+          console.log(`Fetched ${Object.keys(data.themes).length} workshop themes (${data.cached} from cache, ${data.fetched} from DB)`);
+        }
+      } else {
+        console.error("Failed to fetch workshop themes:", await response.text());
       }
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-    } catch (err) {
-      console.error("Failed to save tracker status:", err);
-    } finally {
-      setIsSavingTracker(false);
+    } catch (error) {
+      console.error("Error fetching workshop themes:", error);
     }
-  }, [trackerStatus]);
+  }, [workshopThemes]);
 
+  // Now define fetchOtpData after fetchWorkshopThemes is defined
   const fetchOtpData = useCallback(async () => {
     try {
+      setIsLoading(true);
       // Get the JWT token from local storage
       const token =
         localStorage.getItem("token") || sessionStorage.getItem("token");
@@ -486,6 +493,9 @@ export default function OtpVerificationPage() {
         
         // Fetch workshop themes for each workshop ID
         fetchWorkshopThemes(Array.from(workshopIds));
+        
+        // Update the last refresh time
+        setLastRefreshTime(new Date());
       } else {
         throw new Error("Invalid response format from API");
       }
@@ -497,48 +507,143 @@ export default function OtpVerificationPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
-  
-  // Function to fetch workshop themes by IDs
-  const fetchWorkshopThemes = async (workshopIds: string[]) => {
-    if (!workshopIds.length) return;
+  }, [fetchWorkshopThemes]);
+
+  // Handle refresh button click
+  const handleRefresh = useCallback(() => {
+    fetchOtpData();
+    fetchTrackerStatus();
+  }, [fetchOtpData, fetchTrackerStatus]);
+
+  // Format the last refresh time for display
+  const formatRefreshTime = useCallback((date: Date | null) => {
+    if (!date) return "Never";
     
+    return new Intl.DateTimeFormat('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }).format(date);
+  }, []);
+
+  // This useEffect will update the last refresh time on initial load
+  useEffect(() => {
+    fetchOtpData();
+    fetchTrackerStatus();
+  }, [fetchOtpData, fetchTrackerStatus]);
+
+  // Save tracker status to server
+  const saveTrackerStatus = useCallback(async () => {
     try {
-      const token = localStorage.getItem("token") || sessionStorage.getItem("token");
-      if (!token) return;
+      setIsSavingTracker(true);
+
+      // Clean up localStorage data before saving
+      // Only store items that are "done" or are from the last 30 days
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       
-      // For each workshop ID, fetch workshop details
-      const themes: Record<string, string> = {};
+      const localStorageItems = Object.entries(trackerStatus)
+        .filter(([, data]) => {
+          // Keep items that are either marked as "done" or were updated recently
+          return data.status === "done" || 
+                 new Date(data.lastUpdatedAt) >= thirtyDaysAgo;
+        })
+        .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
       
-      const promises = workshopIds.map(async (id) => {
-        try {
-          const response = await fetch(`/api/workshop?id=${id}`, {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          
-          if (response.ok) {
-            const data = await response.json();
-            if (data.success && data.workshop) {
-              themes[id] = data.workshop.theme;
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching theme for workshop ${id}:`, error);
-        }
+      // Save the cleaned up data to localStorage
+      localStorage.setItem("otpTrackerStatus", JSON.stringify(localStorageItems));
+
+      // Get the JWT token from local storage
+      const token =
+        localStorage.getItem("token") || sessionStorage.getItem("token");
+
+      if (!token) {
+        console.error("Authentication token not found");
+        setIsSavingTracker(false);
+        return;
+      }
+
+      const response = await fetch("/api/tracker-status", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ trackerStatus }),
       });
+
+      if (response.status === 401) {
+        console.error("Not authorized to save tracker status");
+        setIsSavingTracker(false);
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+
+      // Check if we need to clean up the tracker status
+      // Clean if there are too many items or if it's been more than 24 hours
+      const MAX_ITEMS = 1000;
+      const ONE_DAY_MS = 86400000; // 24 hours in milliseconds
       
-      await Promise.all(promises);
-      setWorkshopThemes(themes);
-    } catch (error) {
-      console.error("Error fetching workshop themes:", error);
+      if (Object.keys(trackerStatus).length > MAX_ITEMS ||
+          Date.now() - lastCleanedRef.current > ONE_DAY_MS) {
+        // Keep only recent items or most active ones
+        const itemsToKeep = Object.entries(trackerStatus)
+          .sort((a, b) => {
+            // Sort by lastUpdatedAt time (most recent first)
+            const timeA = new Date(a[1].lastUpdatedAt).getTime();
+            const timeB = new Date(b[1].lastUpdatedAt).getTime();
+            return timeB - timeA;
+          })
+          .slice(0, Math.floor(MAX_ITEMS / 2))
+          .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+        
+        setTrackerStatus(itemsToKeep);
+        lastCleanedRef.current = Date.now();
+      }
+    } catch (err) {
+      console.error("Failed to save tracker status:", err);
+    } finally {
+      setIsSavingTracker(false);
     }
-  };
+  }, [trackerStatus]);
 
   useEffect(() => {
     fetchOtpData();
     fetchTrackerStatus();
+    
+    // Set up a periodic cleanup every hour to prevent memory growth
+    const cleanupInterval = setInterval(() => {
+      if (Object.keys(trackerStatus).length > 500) {
+        // Keep only recent or done items
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        setTrackerStatus(prev => {
+          const itemsToKeep = Object.entries(prev)
+            .filter(([, data]) => {
+              // Keep items that are marked as "done" or were updated recently
+              return data.status === "done" || 
+                    new Date(data.lastUpdatedAt) >= thirtyDaysAgo;
+            })
+            .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+          
+          console.log(`Cleaned up tracker status state: reduced from ${Object.keys(prev).length} to ${Object.keys(itemsToKeep).length} items`);
+          return itemsToKeep;
+        });
+      }
+    }, 3600000); // 1 hour
+    
+    // Cleanup function to clear interval when component unmounts
+    return () => {
+      clearInterval(cleanupInterval);
+    };
   }, [fetchOtpData, fetchTrackerStatus]);
 
   // Save tracker status to server (debounced)
@@ -546,10 +651,19 @@ export default function OtpVerificationPage() {
     // Skip initial empty state
     if (Object.keys(trackerStatus).length === 0) return;
 
+    const MIN_SAVE_INTERVAL = 5000; // Minimum 5 seconds between saves
+    const now = Date.now();
+
+    // If not enough time has passed since last save, set a longer timeout
+    const delay = now - lastSavedRef.current < MIN_SAVE_INTERVAL
+      ? MIN_SAVE_INTERVAL  // Use full interval if saved recently
+      : 1000;              // Use shorter debounce if it's been a while
+    
     const timeoutId = setTimeout(() => {
       saveTrackerStatus();
-    }, 1000); // 1 second debounce
-
+      lastSavedRef.current = Date.now();
+    }, delay);
+    
     return () => clearTimeout(timeoutId);
   }, [trackerStatus, saveTrackerStatus]);
 
@@ -777,22 +891,26 @@ export default function OtpVerificationPage() {
     setConfirmingChildId(null);
   };
 
-  // Function to format the timestamp into a readable format
-  const formatTimestamp = (timestamp?: string) => {
-    if (!timestamp) return "";
+  // For showing when the call was made
+  const formatCallTime = (trackerItem: TrackerStatusItem) => {
+    // Use createdAt for the timestamp when the call was marked as done
+    const timestamp = trackerItem?.createdAt;
+    
+    if (!timestamp) return "Unknown time";
     
     try {
       const date = new Date(timestamp);
+      // Check if date is valid
+      if (isNaN(date.getTime())) {
+        return "Invalid date";
+      }
+      
+      // Format the date in a user-friendly way
       return format(date, "MMM dd, yyyy 'at' h:mm a");
     } catch (error) {
-      console.error("Error formatting timestamp:", error);
-      return "Invalid date";
+      console.error("Error formatting call time:", error);
+      return "Invalid date format";
     }
-  };
-
-  // For showing when the call was made
-  const formatCallTime = (trackerItem: TrackerStatusItem) => {
-    return formatTimestamp(trackerItem.createdAt); 
   }
 
   return (
@@ -801,13 +919,40 @@ export default function OtpVerificationPage() {
       <CustomDateRangeStyles />
       <div className="flex-1 p-6 transition-all duration-300 ease-in-out">
         <div className="flex flex-col w-full">
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">
-              OTP Verification
-            </h1>
-            <p className="text-gray-600">
-              View and manage OTP verification status for workshop bookings
-            </p>
+          <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between">
+            <div>
+              
+              <div className="mt-3 flex items-center space-x-2">
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  onClick={handleRefresh}
+                  disabled={isLoading}
+                  className="flex items-center space-x-1"
+                >
+                  {isLoading ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" />
+                      <span>Refreshing...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feather feather-refresh-cw">
+                        <polyline points="23 4 23 10 17 10"></polyline>
+                        <polyline points="1 20 1 14 7 14"></polyline>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                      </svg>
+                      <span>Refresh</span>
+                    </>
+                  )}
+                </Button>
+                <div className="text-sm text-gray-500">
+                  Last refreshed: <span className="font-medium">{formatRefreshTime(lastRefreshTime)}</span>
+                </div>
+              </div>
+            </div>
+            {/* Empty div to maintain layout - removing the original refresh button section */}
+            <div className="mt-3 md:mt-0"></div>
           </div>
 
           <div className="bg-white rounded-lg shadow p-6">
@@ -1034,7 +1179,14 @@ export default function OtpVerificationPage() {
             )}
 
             {isLoading ? (
-              <div className="text-center py-8">Loading OTP data...</div>
+              <div className="text-center py-8">
+                <div className="inline-flex items-center justify-center">
+                  <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent"></div>
+                  <span className="ml-3 text-lg font-medium text-gray-700">
+                    Loading OTP data...
+                  </span>
+                </div>
+              </div>
             ) : (
               <div className="overflow-hidden border border-gray-200 rounded-md w-full transition-all duration-300 ease-in-out">
                 <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto relative scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-100">
