@@ -76,6 +76,7 @@ interface ChildRowData {
   centerCode: string;
   bookingStatus: string;
   createdAt: string;
+  transactionDate: string;
   workshopId: string;
   workshopTheme?: string;
   isFirstChild: boolean;
@@ -106,9 +107,27 @@ export default function PaymentTrackingPage() {
     to: undefined
   });
   const [workshopThemes, setWorkshopThemes] = useState<WorkshopThemes>({});
-  const [sortBy, setSortBy] = useState<string>("none");
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [otpFilter, setOtpFilter] = useState<string>("all");
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  
+  // Define excluded phone numbers once as a const outside the useMemo
+  const excludePhoneNumbers = [
+    "9426052435",  //Aditya
+    "9571209434",  // yash
+    "9997386442",  //akshit
+    "8235445537",  //saksham
+    "9426042435",  
+    "9560593600",
+    "9876577271",
+    "9581209434",
+    "8348773838",
+    "9517209434",
+    "9811606576",
+    "8778757518",
+    "9813181011",
+    "9997386642",
+    "9571206434",
+  ];
   
   // Wrap fetchBookings in useCallback to avoid recreating it on each render
   const fetchBookings = useCallback(async () => {
@@ -152,6 +171,9 @@ export default function PaymentTrackingPage() {
         
         // Fetch workshop themes
         fetchWorkshopThemes(Array.from(workshopIds));
+        
+        // Update last refreshed timestamp
+        setLastRefreshed(new Date());
       } else {
         throw new Error("Invalid response format from API");
       }
@@ -256,6 +278,7 @@ export default function PaymentTrackingPage() {
           centerCode: booking.center_code,
           bookingStatus: booking.status,
           createdAt: formatDate(createdAt),
+          transactionDate: formatDate(createdAt),
           workshopId: booking.workshop_id,
           workshopTheme: workshopThemes[booking.workshop_id],
           isFirstChild: index === 0,
@@ -270,120 +293,135 @@ export default function PaymentTrackingPage() {
   
   // Filtered and sorted child rows
   const filteredChildRows = useMemo(() => {
+    // Start with transformed data - this includes ALL children for each booking
     let childRows = transformBookingsToChildRows(bookings);
     
-    // Exclude specific phone numbers
-    const excludePhoneNumbers = [
-      "9426052435",  //Aditya
-      "9571209434",  // yash
-      "9997386442",  //akshit
-      "8235445537",  //saksham
-      "9426042435",  
-      "9560593600",
-      "9876577271",
-      "9581209434",
-      "8348773838",
-      "9517209434",
-      "9811606576",
-      "8778757518",
-      "9813181011",
-      "9997386642",
-      "9571206434",
-    ];
-    
+    // Only filter out test/admin phone numbers - all children from the same booking 
+    // share the parent's phone number, so this excludes test/admin bookings
     childRows = childRows.filter(row => !excludePhoneNumbers.includes(row.phoneNumber));
     
-    // Apply search filter
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      childRows = childRows.filter(row => 
-        row.childName.toLowerCase().includes(query) ||
-        row.parentName.toLowerCase().includes(query) ||
-        row.phoneNumber.includes(query) ||
-        row.productInfo.toLowerCase().includes(query) ||
-        row.transactionId.toLowerCase().includes(query) ||
-        row.referenceId.toLowerCase().includes(query)
-      );
-    }
-    
-    // Apply payment status filter
-    if (statusFilter !== "all") {
-      childRows = childRows.filter(row => 
-        statusFilter === "confirmed" ? row.paymentStatus === "confirmed" :
-        statusFilter === "completed" ? row.paymentStatus === "completed" :
-        statusFilter === "failed" ? row.paymentStatus === "failed" : true
-      );
-    }
-    
-    // Apply payment mode filter
-    if (paymentModeFilter !== "all") {
-      childRows = childRows.filter(row => row.paymentMode === paymentModeFilter);
-    }
-    
-    // Apply OTP verification filter
-    if (otpFilter !== "all") {
-      childRows = childRows.filter(row => 
-        otpFilter === "verified" ? row.otpVerified :
-        otpFilter === "pending" ? !row.otpVerified : true
-      );
-    }
-    
-    // Apply date range filter
-    if (dateRange.from && dateRange.to) {
-      const start = new Date(dateRange.from);
-      start.setHours(0, 0, 0, 0);
-      
-      const end = new Date(dateRange.to);
-      end.setHours(23, 59, 59, 999);
-      
-      childRows = childRows.filter(row => {
-        const bookingDate = new Date(row.createdAt);
-        return bookingDate >= start && bookingDate <= end;
-      });
-    }
-    
-    // Apply sorting
-    if (sortBy !== "none") {
-      childRows.sort((a, b) => {
-        let comparison = 0;
+    // Apply all filters in a single pass for better performance
+    childRows = childRows.filter(row => {
+      // Search query filter
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        const searchMatch = 
+          row.childName.toLowerCase().includes(query) ||
+          row.parentName.toLowerCase().includes(query) ||
+          row.phoneNumber.includes(query) ||
+          row.productInfo.toLowerCase().includes(query) ||
+          row.transactionId.toLowerCase().includes(query) ||
+          row.referenceId.toLowerCase().includes(query);
         
-        if (sortBy === "date") {
-          // Sort by workshop date
-          const dateA = new Date(a.workshopDate);
-          const dateB = new Date(b.workshopDate);
-          comparison = dateA.getTime() - dateB.getTime();
-        } else if (sortBy === "time") {
-          // Sort by workshop time
-          comparison = a.workshopTime.localeCompare(b.workshopTime);
-        } else if (sortBy === "amount") {
-          // Sort by payment amount
-          comparison = a.amount - b.amount;
-        } else if (sortBy === "payment") {
-          // Sort by payment status
-          comparison = a.paymentStatus.localeCompare(b.paymentStatus);
+        if (!searchMatch) return false;
+      }
+      
+      // Payment status filter
+      if (statusFilter !== "all" && row.paymentStatus !== statusFilter) {
+        return false;
+      }
+      
+      // Payment mode filter
+      if (paymentModeFilter !== "all" && row.paymentMode !== paymentModeFilter) {
+        return false;
+      }
+      
+      // OTP verification filter
+      if (otpFilter === "verified" && !row.otpVerified) {
+        return false;
+      } else if (otpFilter === "pending" && row.otpVerified) {
+        return false;
+      }
+      
+      // Date range filter
+      if (dateRange.from && dateRange.to) {
+        try {
+          // Check if transactionDate exists and is properly formatted
+          if (!row.transactionDate || typeof row.transactionDate !== 'string') {
+            return false; // Filter out entries without valid dates
+          }
+          
+          // Make sure transactionDate is in the expected format before splitting
+          if (!row.transactionDate.includes('/')) {
+            return false;
+          }
+          
+          const [day, month, year] = row.transactionDate.split('/').map(Number);
+          
+          // Validate that we have valid date components
+          if (!day || !month || !year || isNaN(day) || isNaN(month) || isNaN(year)) {
+            return false;
+          }
+          
+          const bookingDate = new Date(year, month - 1, day);
+          
+          // Validate the resulting date
+          if (isNaN(bookingDate.getTime())) {
+            return false;
+          }
+          
+          const start = new Date(dateRange.from);
+          start.setHours(0, 0, 0, 0);
+          
+          const end = new Date(dateRange.to);
+          end.setHours(23, 59, 59, 999);
+          
+          if (bookingDate < start || bookingDate > end) {
+            return false;
+          }
+        } catch (e) {
+          console.error("Error parsing date:", e, row);
+          return false; // If there's any error in date handling, filter out the row
         }
-        
-        // Apply sort direction
-        return sortDirection === "asc" ? comparison : -comparison;
-      });
-    }
+      }
+      
+      // If passed all filters, include the row
+      return true;
+    });
     
     return childRows;
-  }, [bookings, searchQuery, statusFilter, paymentModeFilter, otpFilter, dateRange, sortBy, sortDirection, transformBookingsToChildRows]); // Add transformBookingsToChildRows back
+  }, [bookings, searchQuery, statusFilter, paymentModeFilter, otpFilter, dateRange, transformBookingsToChildRows]);
+
+  // Count active filters for the filter summary
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (statusFilter !== "all") count++;
+    if (paymentModeFilter !== "all") count++;
+    if (otpFilter !== "all") count++;
+    if (dateRange.from && dateRange.to) count++;
+    if (searchQuery) count++;
+    return count;
+  }, [statusFilter, paymentModeFilter, otpFilter, dateRange, searchQuery]);
+
+  // Format the lastRefreshed date for display
+  const formatLastRefreshed = () => {
+    if (!lastRefreshed) return 'Never';
+    
+    const now = new Date();
+    const diff = Math.floor((now.getTime() - lastRefreshed.getTime()) / 1000); // diff in seconds
+    
+    if (diff < 60) return `${diff} second${diff !== 1 ? 's' : ''} ago`;
+    if (diff < 3600) {
+      const minutes = Math.floor(diff / 60);
+      return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+    }
+    
+    const hours = lastRefreshed.getHours().toString().padStart(2, '0');
+    const minutes = lastRefreshed.getMinutes().toString().padStart(2, '0');
+    return `at ${hours}:${minutes}`;
+  };
+
+  // Handle refresh button click
+  const handleRefresh = () => {
+    fetchBookings();
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
       <PageHeader pageName="Payment Tracking" />
       <div className="flex-1 p-6 transition-all duration-300 ease-in-out">
         <div className="flex flex-col w-full">
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">
-              Payment Tracking
-            </h1>
-            <p className="text-gray-600">
-              Track and manage all workshop booking payments
-            </p>
-          </div>
+          
 
           <div className="bg-white rounded-lg shadow p-6">
             <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -393,8 +431,15 @@ export default function PaymentTrackingPage() {
                     value={statusFilter}
                     onValueChange={(value) => setStatusFilter(value)}
                   >
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Payment Status" />
+                    <SelectTrigger className={`w-[180px] ${statusFilter !== "all" ? "border-blue-500 bg-blue-50" : ""}`}>
+                      <SelectValue placeholder="Payment Status">
+                        {statusFilter === "all" ? "Payment Status" : 
+                         statusFilter === "confirmed" ? "Confirmed" :
+                         statusFilter === "completed" ? "Completed" :
+                         statusFilter === "initiated" ? "Initiated" :
+                         statusFilter === "pending" ? "Pending" :
+                         statusFilter === "failed" ? "Failed" : "Payment Status"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Statuses</SelectItem>
@@ -410,8 +455,12 @@ export default function PaymentTrackingPage() {
                     value={paymentModeFilter}
                     onValueChange={(value) => setPaymentModeFilter(value)}
                   >
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="Payment Mode" />
+                    <SelectTrigger className={`w-[180px] ${paymentModeFilter !== "all" ? "border-purple-500 bg-purple-50" : ""}`}>
+                      <SelectValue placeholder="Payment Mode">
+                        {paymentModeFilter === "all" ? "Payment Mode" :
+                         paymentModeFilter === "online" ? "Online" :
+                         paymentModeFilter === "offline" ? "Offline" : "Payment Mode"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All Modes</SelectItem>
@@ -424,8 +473,12 @@ export default function PaymentTrackingPage() {
                     value={otpFilter}
                     onValueChange={(value) => setOtpFilter(value)}
                   >
-                    <SelectTrigger className="w-[180px]">
-                      <SelectValue placeholder="OTP Status" />
+                    <SelectTrigger className={`w-[180px] ${otpFilter !== "all" ? "border-amber-500 bg-amber-50" : ""}`}>
+                      <SelectValue placeholder="OTP Status">
+                        {otpFilter === "all" ? "OTP Status" :
+                         otpFilter === "verified" ? "OTP Verified" :
+                         otpFilter === "pending" ? "OTP Pending" : "OTP Status"}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All OTP Status</SelectItem>
@@ -434,16 +487,31 @@ export default function PaymentTrackingPage() {
                     </SelectContent>
                   </Select>
 
+                  {/* Refresh Button */}
+                  <Button 
+                    variant="outline" 
+                    size="default" 
+                    onClick={handleRefresh}
+                    disabled={isLoading}
+                    className="flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`${isLoading ? "animate-spin" : ""}`}>
+                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                      <path d="M21 3v5h-5" />
+                    </svg>
+                    {isLoading ? "Refreshing..." : "Refresh Data"}
+                  </Button>
+
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
-                        className={`w-[220px] justify-start ${dateRange.from && dateRange.to ? 'border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100' : ''}`}
+                        className={`w-[220px] px-3 py-2 justify-start ${dateRange.from && dateRange.to ? 'border-indigo-500 bg-indigo-50 text-indigo-900 hover:bg-indigo-100' : ''}`}
                       >
                         {dateRange.from && dateRange.to ? (
                           <div className="flex items-center">
                             <CalendarIcon className="mr-2 h-4 w-4 text-indigo-600" />
-                            <span>
+                            <span className="font-medium">
                               {format(dateRange.from, "MMM d")} - {format(dateRange.to, "MMM d, yyyy")}
                             </span>
                           </div>
@@ -451,17 +519,21 @@ export default function PaymentTrackingPage() {
                           <div className="flex items-center">
                             <CalendarIcon className="mr-2 h-4 w-4" />
                             <div className="flex flex-col items-start text-left">
-                              <span className="text-xs text-gray-500">Booking Date</span>
-                              <span>Select Date Range</span>
+                              <span className="text-xs font-medium text-gray-500">Transaction Date</span>
+                              <span className="text-sm">Select Range</span>
                             </div>
                           </div>
                         )}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent 
-                      className="w-auto p-0" 
+                      className="w-auto p-0 border border-indigo-200 shadow-lg rounded-md" 
                       align="start"
                     >
+                      <div className="p-2 border-b border-indigo-100 bg-indigo-50">
+                        <h3 className="font-medium text-indigo-900">Filter by Transaction Date</h3>
+                        <p className="text-xs text-indigo-700">Select start and end dates</p>
+                      </div>
                       <DayPicker
                         mode="range"
                         selected={dateRange}
@@ -477,88 +549,146 @@ export default function PaymentTrackingPage() {
                         }}
                         numberOfMonths={2}
                         className={cn("p-3")}
+                        classNames={{
+                          months: "flex flex-col sm:flex-row space-y-4 sm:space-x-4 sm:space-y-0",
+                          month: "space-y-4",
+                          caption: "flex justify-center pt-1 relative items-center",
+                          caption_label: "text-sm font-medium text-gray-900",
+                          nav: "space-x-1 flex items-center",
+                          nav_button: "h-7 w-7 bg-transparent p-0 opacity-50 hover:opacity-100 hover:bg-gray-100 rounded-full",
+                          nav_button_previous: "absolute left-1",
+                          nav_button_next: "absolute right-1",
+                          table: "w-full border-collapse space-y-1",
+                          head_row: "flex",
+                          head_cell: "text-gray-500 rounded-md w-9 font-normal text-[0.8rem]",
+                          row: "flex w-full mt-2",
+                          cell: "text-center text-sm p-0 relative [&:has([aria-selected])]:bg-indigo-50 first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
+                          day: "h-9 w-9 p-0 font-normal aria-selected:opacity-100 rounded-md",
+                          day_selected: "bg-indigo-600 text-white hover:bg-indigo-600 hover:text-white focus:bg-indigo-600 focus:text-white",
+                          day_today: "bg-gray-100 text-gray-900",
+                          day_outside: "text-gray-400 opacity-50",
+                          day_disabled: "text-gray-400 opacity-50",
+                          day_range_middle: "aria-selected:bg-indigo-100 aria-selected:text-indigo-900",
+                          day_hidden: "invisible",
+                        }}
+                        modifiersStyles={{
+                          selected: { backgroundColor: "#4f46e5", color: "white" },
+                          today: { color: "#4f46e5", fontWeight: "bold" },
+                          range_start: { backgroundColor: "#4f46e5", color: "white" },
+                          range_end: { backgroundColor: "#4f46e5", color: "white" },
+                        }}
                       />
+                      <div className="p-3 border-t border-indigo-100 bg-indigo-50 flex justify-between">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setDateRange({ from: undefined, to: undefined })}
+                          className="text-indigo-700 border-indigo-300 hover:bg-indigo-100"
+                        >
+                          Clear
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => document.body.click()}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white"
+                        >
+                          Apply Filter
+                        </Button>
+                      </div>
                     </PopoverContent>
                   </Popover>
                 </div>
               </div>
 
               <div className="w-full md:w-auto md:self-start flex flex-col sm:flex-row gap-2">
-                <Input
-                  placeholder="Search by name, phone, transaction ID"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full md:w-[320px]"
-                />
-                <Select
-                  value={sortBy}
-                  onValueChange={setSortBy}
-                >
-                  <SelectTrigger className="w-[180px]">
-                    <div className="flex items-center justify-between">
-                      <span>
-                        {sortBy === "none"
-                          ? "Sort By"
-                          : sortBy === "date"
-                          ? "Workshop Date"
-                          : sortBy === "time"
-                          ? "Workshop Time"
-                          : sortBy === "amount"
-                          ? "Amount"
-                          : "Payment Status"}
-                      </span>
-                      {sortBy !== "none" && (
-                        <span className="text-xs bg-primary/10 text-primary px-1 rounded">
-                          {sortDirection === "asc" ? "↑ A-Z" : "↓ Z-A"}
-                        </span>
-                      )}
-                    </div>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No Sorting</SelectItem>
-                    <SelectItem value="date">Workshop Date</SelectItem>
-                    <SelectItem value="time">Workshop Time</SelectItem>
-                    <SelectItem value="amount">Amount</SelectItem>
-                    <SelectItem value="payment">Payment Status</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                {sortBy !== "none" && (
-                  <Button
-                    variant="outline"
-                    size="default"
-                    onClick={() =>
-                      setSortDirection(
-                        sortDirection === "asc" ? "desc" : "asc"
-                      )
-                    }
-                    className="w-[100px] flex justify-between items-center"
-                  >
-                    {sortDirection === "asc" ? "Ascending" : "Descending"}
-                    <span className="text-xs">
-                      {sortDirection === "asc" ? "↑" : "↓"}
-                    </span>
-                  </Button>
-                )}
+                <div className="relative w-full md:w-[320px]">
+                  <Input
+                    placeholder="Search by name, phone, transaction ID"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className={`pl-9 w-full ${searchQuery ? "border-green-500 bg-green-50" : ""}`}
+                  />
+                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="11" cy="11" r="8"></circle>
+                      <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                    </svg>
+                  </div>
+                  {searchQuery && (
+                    <button 
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-green-500 hover:text-green-700"
+                      onClick={() => setSearchQuery("")}
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                      </svg>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2 mb-4">
+              {activeFilterCount > 0 && (
+                <div className="w-full mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-700">Active Filters:</span>
+                    <Badge variant="outline" className="bg-blue-100 text-blue-800 border-blue-300">
+                      {activeFilterCount} {activeFilterCount === 1 ? 'filter' : 'filters'} applied
+                    </Badge>
+                    {activeFilterCount > 1 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 px-2 text-xs text-gray-600 hover:text-gray-900"
+                        onClick={() => {
+                          setStatusFilter("all");
+                          setPaymentModeFilter("all");
+                          setOtpFilter("all");
+                          setDateRange({ from: undefined, to: undefined });
+                          setSearchQuery("");
+                        }}
+                      >
+                        Clear All Filters
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {searchQuery && (
+                <Badge variant="outline" className="flex items-center gap-1 bg-green-100 border-green-300 text-green-800 px-3 py-1.5 rounded-md">
+                  <span className="font-medium text-green-800 mr-1">Search:</span>
+                  <span className="font-semibold text-green-900">&quot;{searchQuery}&quot;</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 p-0 ml-1.5 text-green-600 hover:text-green-800 hover:bg-green-200 rounded-full"
+                    onClick={() => {
+                      setSearchQuery("");
+                    }}
+                  >
+                    ×
+                  </Button>
+                </Badge>
+              )}
+
               {dateRange.from && dateRange.to && (
-                <Badge variant="outline" className="flex items-center gap-1 bg-indigo-100 border-indigo-300 text-indigo-800">
-                  <CalendarIcon className="h-3 w-3 mr-1 text-indigo-600" />
-                  Transaction Date: 
-                  <span className="font-semibold ml-1">
+                <Badge variant="outline" className="flex items-center gap-1 bg-indigo-100 border-indigo-300 text-indigo-800 px-3 py-1.5 rounded-md">
+                  <CalendarIcon className="h-3.5 w-3.5 mr-1 text-indigo-600" />
+                  <span className="font-medium text-indigo-800 mr-1">Transaction Date:</span>
+                  <span className="font-semibold text-indigo-900">
                     {format(dateRange.from, "MMM d")}
                   </span>
-                  <span className="mx-1">-</span>
-                  <span className="font-semibold">
+                  <span className="mx-1 text-indigo-400">—</span>
+                  <span className="font-semibold text-indigo-900">
                     {format(dateRange.to, "MMM d, yyyy")}
                   </span>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-4 w-4 p-0 ml-1 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-200"
+                    className="h-5 w-5 p-0 ml-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-200 rounded-full"
                     onClick={() => {
                       setDateRange({ from: undefined, to: undefined });
                     }}
@@ -569,12 +699,15 @@ export default function PaymentTrackingPage() {
               )}
 
               {statusFilter !== "all" && (
-                <Badge variant="outline" className="flex items-center gap-1 bg-blue-100 border-blue-300 text-blue-800">
-                  Payment Status: {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+                <Badge variant="outline" className="flex items-center gap-1 bg-blue-100 border-blue-300 text-blue-800 px-3 py-1.5 rounded-md">
+                  <span className="font-medium text-blue-800 mr-1">Payment Status:</span>
+                  <span className="font-semibold text-blue-900">
+                    {statusFilter.charAt(0).toUpperCase() + statusFilter.slice(1)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-4 w-4 p-0 ml-1 text-blue-600 hover:text-blue-800 hover:bg-blue-200"
+                    className="h-5 w-5 p-0 ml-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-200 rounded-full"
                     onClick={() => {
                       setStatusFilter("all");
                     }}
@@ -585,12 +718,15 @@ export default function PaymentTrackingPage() {
               )}
 
               {paymentModeFilter !== "all" && (
-                <Badge variant="outline" className="flex items-center gap-1 bg-purple-100 border-purple-300 text-purple-800">
-                  Payment Mode: {paymentModeFilter.charAt(0).toUpperCase() + paymentModeFilter.slice(1)}
+                <Badge variant="outline" className="flex items-center gap-1 bg-purple-100 border-purple-300 text-purple-800 px-3 py-1.5 rounded-md">
+                  <span className="font-medium text-purple-800 mr-1">Payment Mode:</span>
+                  <span className="font-semibold text-purple-900">
+                    {paymentModeFilter.charAt(0).toUpperCase() + paymentModeFilter.slice(1)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-4 w-4 p-0 ml-1 text-purple-600 hover:text-purple-800 hover:bg-purple-200"
+                    className="h-5 w-5 p-0 ml-1.5 text-purple-600 hover:text-purple-800 hover:bg-purple-200 rounded-full"
                     onClick={() => {
                       setPaymentModeFilter("all");
                     }}
@@ -601,12 +737,15 @@ export default function PaymentTrackingPage() {
               )}
 
               {otpFilter !== "all" && (
-                <Badge variant="outline" className="flex items-center gap-1 bg-amber-100 border-amber-300 text-amber-800">
-                  OTP: {otpFilter === "verified" ? "Verified" : "Pending"}
+                <Badge variant="outline" className="flex items-center gap-1 bg-amber-100 border-amber-300 text-amber-800 px-3 py-1.5 rounded-md">
+                  <span className="font-medium text-amber-800 mr-1">OTP Status:</span>
+                  <span className="font-semibold text-amber-900">
+                    {otpFilter === "verified" ? "Verified" : "Pending"}
+                  </span>
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-4 w-4 p-0 ml-1 text-amber-600 hover:text-amber-800 hover:bg-amber-200"
+                    className="h-5 w-5 p-0 ml-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-200 rounded-full"
                     onClick={() => {
                       setOtpFilter("all");
                     }}
@@ -615,28 +754,15 @@ export default function PaymentTrackingPage() {
                   </Button>
                 </Badge>
               )}
+            </div>
 
-              {sortBy !== "none" && (
-                <Badge variant="outline" className="flex items-center gap-1">
-                  Sorted by:{" "}
-                  {sortBy === "date" 
-                    ? "Workshop Date" 
-                    : sortBy === "time" 
-                    ? "Workshop Time" 
-                    : sortBy === "amount" 
-                    ? "Amount" 
-                    : "Payment Status"}
-                  ({sortDirection === "asc" ? "Ascending" : "Descending"})
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-4 w-4 p-0 text-gray-500 hover:text-gray-900"
-                    onClick={() => setSortBy("none")}
-                  >
-                    ×
-                  </Button>
-                </Badge>
-              )}
+            {/* Last Updated Timestamp */}
+            <div className="text-xs text-gray-500 mb-3 flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mr-1">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+              Last updated: {formatLastRefreshed()}
             </div>
 
             {error && (
@@ -649,7 +775,19 @@ export default function PaymentTrackingPage() {
               <div className="text-center py-8">Loading payment data...</div>
             ) : (
               <div className="overflow-hidden border border-gray-200 rounded-md w-full">
-                <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
+                <div className="flex justify-between items-center px-4 py-2 bg-gray-50 border-b">
+                  <div className="text-sm font-medium text-gray-700">
+                    {filteredChildRows.length} payments found
+                  </div>
+                  {filteredChildRows.length > 0 && activeFilterCount > 0 && (
+                    <div className="text-xs text-gray-600">
+                      Filtered from {transformBookingsToChildRows(bookings).filter(row => 
+                        !excludePhoneNumbers.includes(row.phoneNumber)
+                      ).length} total payments
+                    </div>
+                  )}
+                </div>
+                <div className="overflow-x-auto max-h-[calc(100vh-320px)] overflow-y-auto">
                   <table className="w-full divide-y divide-gray-200" style={{ minWidth: "1400px" }}>
                     <thead className="bg-gray-50 sticky top-0 z-10">
                       <tr>
@@ -658,6 +796,9 @@ export default function PaymentTrackingPage() {
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[130px]">
                           Transaction ID
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[110px]">
+                          Trans. Date
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-[130px]">
                           Reference ID
@@ -738,6 +879,9 @@ export default function PaymentTrackingPage() {
                                   <span className="font-mono text-xs tracking-tighter">
                                     {row.transactionId}
                                   </span>
+                                </td>
+                                <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-900">
+                                  {row.transactionDate}
                                 </td>
                                 <td className="px-3 py-2 whitespace-nowrap text-sm text-gray-500">
                                   <span className="font-mono text-xs tracking-tighter">
