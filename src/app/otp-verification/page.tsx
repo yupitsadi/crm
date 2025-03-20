@@ -816,7 +816,19 @@ export default function OtpVerificationPage() {
       });
     }
 
-    // Apply sorting
+    // First apply default sorting by transaction date (most recent first)
+    filtered.sort((a, b) => {
+      try {
+        const dateA = new Date(a.createdAt);
+        const dateB = new Date(b.createdAt);
+        return dateB.getTime() - dateA.getTime(); // Sort descending (newest first)
+      } catch (error) {
+        console.error("Error sorting by transaction date:", error);
+        return 0;
+      }
+    });
+
+    // Then apply any explicit sorting options if selected
     if (sortBy !== "none") {
       filtered.sort((a, b) => {
         if (sortBy === "date") {

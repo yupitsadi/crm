@@ -70,6 +70,7 @@ interface ChildAttendanceData {
   comments: string;
   isSaved?: boolean; // Track if this record has been saved to database
   transactionId?: string; // Transaction ID from the payment
+  transactionDate?: Date; // Add transaction date for sorting
 }
 
 interface WorkshopData {
@@ -292,6 +293,18 @@ export default function AttendanceMarkingPage() {
         }
       }
       
+      // Parse the created_at date for transaction date
+      let transactionDate: Date | undefined;
+      try {
+        if (typeof booking.created_at === 'object' && booking.created_at.$date) {
+          transactionDate = new Date(booking.created_at.$date);
+        } else if (typeof booking.created_at === 'string') {
+          transactionDate = new Date(booking.created_at);
+        }
+      } catch (e) {
+        console.error("Error parsing transaction date:", e);
+      }
+      
       booking.child.forEach((child, index) => {
         attendanceData.push({
           id: `${bookingId}-${index}`,
@@ -308,9 +321,23 @@ export default function AttendanceMarkingPage() {
           attendanceStatus: 'pending',
           comments: '',
           isSaved: false,
-          transactionId: booking.payment.Transaction_ID || ''
+          transactionId: booking.payment.Transaction_ID || '',
+          transactionDate
         });
       });
+    });
+    
+    // Sort by transaction date (most recent first) right after transformation
+    attendanceData.sort((a, b) => {
+      // If both have transaction dates, compare them
+      if (a.transactionDate && b.transactionDate) {
+        return b.transactionDate.getTime() - a.transactionDate.getTime();
+      }
+      // If only one has transaction date, prioritize the one with date
+      if (a.transactionDate) return -1;
+      if (b.transactionDate) return 1;
+      // If neither has transaction date, keep original order
+      return 0;
     });
     
     setChildAttendance(attendanceData);
@@ -361,10 +388,10 @@ export default function AttendanceMarkingPage() {
   
   // Fetch bookings data
   const fetchBookings = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    
-    try {
+      setIsLoading(true);
+      setError(null);
+      
+      try {
       // Get auth token
       const token = localStorage.getItem("token") || sessionStorage.getItem("token");
       
@@ -428,7 +455,6 @@ export default function AttendanceMarkingPage() {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(child => 
         child.childName.toLowerCase().includes(query) ||
-        child.parentName.toLowerCase().includes(query) ||
         child.phoneNumber.includes(query)
       );
     }
@@ -451,8 +477,54 @@ export default function AttendanceMarkingPage() {
       );
     }
     
+    // Sort by transaction date (most recent first)
+    filtered.sort((a, b) => {
+      // If both have transaction dates, compare them
+      if (a.transactionDate && b.transactionDate) {
+        return b.transactionDate.getTime() - a.transactionDate.getTime();
+      }
+      // If only one has transaction date, prioritize the one with date
+      if (a.transactionDate) return -1;
+      if (b.transactionDate) return 1;
+      
+      // If neither has transaction date, fall back to workshop date
+      const dateA = parseWorkshopDate(a.workshopDate);
+      const dateB = parseWorkshopDate(b.workshopDate);
+      
+      if (dateA && dateB) {
+        return dateB.getTime() - dateA.getTime();
+      }
+      if (dateA) return -1;
+      if (dateB) return 1;
+      
+      // If no dates available, keep original order
+      return 0;
+    });
+    
     setFilteredAttendance(filtered);
   }, [childAttendance, searchQuery, timeFilter, workshopFilter, getWorkshopTimeCategory]);
+  
+  // Helper function to parse workshop date
+  const parseWorkshopDate = (dateStr: string | undefined): Date | null => {
+    if (!dateStr || typeof dateStr !== 'string' || !dateStr.includes('/')) {
+      return null;
+    }
+    
+    try {
+      // Parse date in dd/mm/yyyy format
+      const [day, month, year] = dateStr.split('/').map(Number);
+      
+      // Validate parsed date components
+      if (!day || !month || !year || isNaN(day) || isNaN(month) || isNaN(year)) {
+        return null;
+      }
+      
+      return new Date(year, month - 1, day);
+    } catch (e) {
+      console.error("Error parsing date:", e);
+      return null;
+    }
+  };
   
   // Fetch data on component mount
   useEffect(() => {
@@ -529,10 +601,10 @@ export default function AttendanceMarkingPage() {
       ));
       
       console.log(`Attendance marked ${status} for ${child.childName}`);
-    } catch (error) {
+      } catch (error) {
       console.error("Error saving attendance:", error);
       // Could add user notification here
-    } finally {
+      } finally {
       setIsSaving(false);
     }
   };
@@ -811,7 +883,7 @@ export default function AttendanceMarkingPage() {
                 {filteredAttendance.length} {filteredAttendance.length === 1 ? 'child' : 'children'} found
               </div>
               <div className="overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto">
-                <table className="min-w-full divide-y divide-gray-200">
+            <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50 sticky top-0 z-10">
                     <tr>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">S.No</th>
@@ -820,11 +892,12 @@ export default function AttendanceMarkingPage() {
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Workshop</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Date & Time</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Booked On</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Attendance</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Comments</th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
                     {filteredAttendance.length > 0 ? (
                       filteredAttendance.map((child, index) => (
                         <tr key={child.id} className="hover:bg-gray-50">
@@ -838,6 +911,12 @@ export default function AttendanceMarkingPage() {
                           <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-900">
                             {child.workshopDate || 'Date not available'}{child.workshopTime ? `, ${child.workshopTime}` : ''}
                           </td>
+                          <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                            {child.transactionDate 
+                              ? child.transactionDate.toLocaleDateString() + ', ' + 
+                                child.transactionDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
+                              : 'N/A'}
+                          </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             {child.attendanceStatus === 'present' ? (
                               <Badge className="bg-green-100 text-green-800 border-green-300">Present</Badge>
@@ -850,11 +929,11 @@ export default function AttendanceMarkingPage() {
                                 onChange={(e) => updateAttendanceStatus(child.id, e.target.value as 'pending' | 'present' | 'absent')}
                               >
                                 <option value="pending">Mark Attendance</option>
-                                <option value="present">Present</option>
-                                <option value="absent">Absent</option>
-                              </select>
+                      <option value="present">Present</option>
+                      <option value="absent">Absent</option>
+                    </select>
                             )}
-                          </td>
+                  </td>
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="relative">
                               <Input 
@@ -867,18 +946,18 @@ export default function AttendanceMarkingPage() {
                                 <span className="absolute right-0 -top-1 h-2 w-2 bg-amber-400 rounded-full"></span>
                               )}
                             </div>
-                          </td>
-                        </tr>
+                  </td>
+                </tr>
                       ))
                     ) : (
                       <tr>
-                        <td colSpan={8} className="px-6 py-4 text-center text-gray-500">
+                        <td colSpan={9} className="px-6 py-4 text-center text-gray-500">
                           No children found. Please adjust your filters.
-                        </td>
-                      </tr>
+                  </td>
+                </tr>
                     )}
-                  </tbody>
-                </table>
+              </tbody>
+            </table>
               </div>
               
               <div className="mt-6 flex justify-end">

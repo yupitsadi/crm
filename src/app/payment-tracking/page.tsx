@@ -379,6 +379,30 @@ export default function PaymentTrackingPage() {
       return true;
     });
     
+    // Sort by transaction date - most recent first
+    childRows.sort((a, b) => {
+      try {
+        // Parse dates from DD/MM/YYYY format
+        const [dayA, monthA, yearA] = a.transactionDate.split('/').map(Number);
+        const [dayB, monthB, yearB] = b.transactionDate.split('/').map(Number);
+        
+        // Create Date objects
+        const dateA = new Date(yearA, monthA - 1, dayA);
+        const dateB = new Date(yearB, monthB - 1, dayB);
+        
+        // Validate dates before comparing
+        if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
+          return 0; // Keep original order if dates are invalid
+        }
+        
+        // Sort descending (newest first)
+        return dateB.getTime() - dateA.getTime();
+      } catch (error) {
+        console.error("Error sorting by transaction date:", error);
+        return 0; // Keep original order on error
+      }
+    });
+    
     return childRows;
   }, [bookings, searchQuery, statusFilter, paymentModeFilter, otpFilter, dateRange, transformBookingsToChildRows]);
 
