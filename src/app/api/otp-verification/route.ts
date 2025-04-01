@@ -27,6 +27,42 @@ interface BookingDocument {
   created_at?: { $date: string } | string | Date;
 }
 
+// Add caching layer
+interface CacheEntry {
+  data: {
+    verifications: Array<{
+      id: string;
+      workshopId: string | null;
+      childNames: string[];
+      childAges: number[];
+      parentName: string;
+      phoneNumber: string;
+      otpVerified: boolean;
+      workshopDate: string;
+      workshopTime: string;
+      workshopLocation: string;
+      transactionId: string;
+      productInfo: string;
+      amount: number;
+      status: string;
+      centerCode: string;
+      createdAt: string;
+      paymentStatus: string;
+      paymentGateway?: string;
+    }>;
+    _cached: boolean;
+    _stale?: boolean;
+  };
+  expiry: number;
+}
+
+// Use a simple in-memory cache with expiration
+const cache: Record<string, CacheEntry> = {};
+
+// Cache configuration
+const CACHE_TTL = 60 * 1000; // 60 seconds in milliseconds
+const CACHE_KEY = 'otp_verifications';
+
 export async function GET(req: NextRequest) {
   // Authentication check
   const authResponse = await authMiddleware(req, ['admin', 'staff']);
@@ -39,6 +75,16 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // Check for force refresh in query params
+    const url = new URL(req.url);
+    const forceRefresh = url.searchParams.get('refresh') === 'true';
+    
+    // Check cache first (unless force refresh is requested)
+    if (!forceRefresh && cache[CACHE_KEY] && cache[CACHE_KEY].expiry > Date.now()) {
+      console.log('Serving OTP verifications from cache');
+      return NextResponse.json(cache[CACHE_KEY].data);
+    }
+
     // Connect to the workshop database with timeout
     let connection: mongoose.Connection;
     try {
@@ -51,6 +97,17 @@ export async function GET(req: NextRequest) {
       connection = await Promise.race([connectionPromise, timeoutPromise]);
     } catch (connError) {
       console.error('Database connection error:', connError);
+      
+      // If we have cached data, return it even if expired as fallback
+      if (cache[CACHE_KEY]) {
+        console.log('Returning stale cache due to connection error');
+        return NextResponse.json({
+          ...cache[CACHE_KEY].data,
+          _cached: true,
+          _stale: true
+        });
+      }
+      
       return NextResponse.json(
         { 
           error: 'Database connection error', 
@@ -64,6 +121,17 @@ export async function GET(req: NextRequest) {
     if (!connection || connection.readyState !== 1) {
       const state = connection ? connection.readyState : 'null';
       console.error(`Invalid database connection state: ${state}`);
+      
+      // If we have cached data, return it even if expired as fallback
+      if (cache[CACHE_KEY]) {
+        console.log('Returning stale cache due to invalid connection');
+        return NextResponse.json({
+          ...cache[CACHE_KEY].data,
+          _cached: true,
+          _stale: true
+        });
+      }
+      
       return NextResponse.json(
         { error: 'Database connection error', details: `Invalid connection state: ${state}` }, 
         { status: 503 }
@@ -75,6 +143,17 @@ export async function GET(req: NextRequest) {
     // Safety check for database access
     if (!connection.db) {
       console.error('Database object is undefined');
+      
+      // If we have cached data, return it even if expired as fallback
+      if (cache[CACHE_KEY]) {
+        console.log('Returning stale cache due to undefined database');
+        return NextResponse.json({
+          ...cache[CACHE_KEY].data,
+          _cached: true,
+          _stale: true
+        });
+      }
+      
       return NextResponse.json(
         { error: 'Database error', details: 'Database object is undefined' }, 
         { status: 500 }
@@ -95,6 +174,17 @@ export async function GET(req: NextRequest) {
       bookings = await Promise.race([queryPromise, queryTimeoutPromise]);
     } catch (queryError) {
       console.error('Error querying bookings collection:', queryError);
+      
+      // If we have cached data, return it even if expired as fallback
+      if (cache[CACHE_KEY]) {
+        console.log('Returning stale cache due to query error');
+        return NextResponse.json({
+          ...cache[CACHE_KEY].data,
+          _cached: true,
+          _stale: true
+        });
+      }
+      
       return NextResponse.json(
         { error: 'Database query error', details: queryError instanceof Error ? queryError.message : 'Failed to query database' }, 
         { status: 500 }
@@ -152,13 +242,34 @@ export async function GET(req: NextRequest) {
       };
     });
     
-    return NextResponse.json({ verifications });
+    // Store response in cache with expiration time
+    const responseData = { verifications, _cached: false };
+    cache[CACHE_KEY] = {
+      data: responseData,
+      expiry: Date.now() + CACHE_TTL
+    };
+    
+    // Set cache header in response
+    const headers = new Headers();
+    headers.set('Cache-Control', `max-age=${CACHE_TTL / 1000}`);
+    
+    return NextResponse.json(responseData, { headers });
   } catch (error: unknown) {
     const errorMessage = error instanceof Error 
       ? error.message 
       : 'Unknown error occurred';
       
     console.error('Error in OTP verification API:', errorMessage);
+    
+    // If we have cached data, return it even if expired as fallback
+    if (cache[CACHE_KEY]) {
+      console.log('Returning stale cache due to error');
+      return NextResponse.json({
+        ...cache[CACHE_KEY].data,
+        _cached: true,
+        _stale: true
+      });
+    }
     
     return NextResponse.json(
       { error: 'Failed to fetch OTP verification data', details: errorMessage }, 

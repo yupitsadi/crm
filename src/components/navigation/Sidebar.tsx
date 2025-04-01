@@ -44,7 +44,7 @@ export default function Sidebar() {
     
     // Set up an interval to periodically check auth status
     // This ensures the sidebar state stays in sync with auth state
-    const intervalId = setInterval(checkAuth, 1000);
+    const intervalId = setInterval(checkAuth, 30000);
     
     return () => {
       window.removeEventListener('storage', checkAuth);

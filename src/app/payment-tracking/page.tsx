@@ -11,6 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { CalendarIcon } from "@heroicons/react/24/outline";
 import { cn } from "@/lib/utils";
 import { DayPicker } from "react-day-picker";
+import { startOfDay, endOfDay, isWithinInterval } from 'date-fns';
 
 
 // Interface for bookings from DB
@@ -110,8 +111,8 @@ export default function PaymentTrackingPage() {
   const [otpFilter, setOtpFilter] = useState<string>("all");
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   
-  // Define excluded phone numbers once as a const outside the useMemo
-  const excludePhoneNumbers = [
+  // Replace static array with useMemo
+  const excludePhoneNumbers = useMemo(() => [
     "9426052435",  //Aditya
     "9571209434",  // yash
     "9997386442",  //akshit
@@ -127,7 +128,7 @@ export default function PaymentTrackingPage() {
     "9813181011",
     "9997386642",
     "9571206434",
-  ];
+  ], []); // Empty dependency array since this list never changes
   
   // Wrap fetchBookings in useCallback to avoid recreating it on each render
   const fetchBookings = useCallback(async () => {
@@ -291,120 +292,81 @@ export default function PaymentTrackingPage() {
     return childRows;
   }, [workshopThemes, formatDate, getObjectId]); // dependencies remain the same
   
-  // Filtered and sorted child rows
+  // Filter and format child rows data
   const filteredChildRows = useMemo(() => {
-    // Start with transformed data - this includes ALL children for each booking
+    // Start with all child rows
     let childRows = transformBookingsToChildRows(bookings);
     
-    // Only filter out test/admin phone numbers - all children from the same booking 
-    // share the parent's phone number, so this excludes test/admin bookings
-    childRows = childRows.filter(row => !excludePhoneNumbers.includes(row.phoneNumber));
+    // Filter excluded phone numbers
+    childRows = childRows.filter(child => !excludePhoneNumbers.includes(child.phoneNumber));
     
-    // Apply all filters in a single pass for better performance
-    childRows = childRows.filter(row => {
-      // Search query filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const searchMatch = 
-          row.childName.toLowerCase().includes(query) ||
-          row.parentName.toLowerCase().includes(query) ||
-          row.phoneNumber.includes(query) ||
-          row.productInfo.toLowerCase().includes(query) ||
-          row.transactionId.toLowerCase().includes(query) ||
-          row.referenceId.toLowerCase().includes(query);
-        
-        if (!searchMatch) return false;
-      }
+    // Apply search filter
+    if (searchQuery) {
+      const query = searchQuery.toLowerCase();
+      childRows = childRows.filter(child => 
+        child.childName.toLowerCase().includes(query) ||
+        child.parentName.toLowerCase().includes(query) ||
+        child.phoneNumber.includes(query) ||
+        child.transactionId.toLowerCase().includes(query) ||
+        child.productInfo.toLowerCase().includes(query)
+      );
+    }
+    
+    // Apply payment status filter
+    if (statusFilter !== "all") {
+      childRows = childRows.filter(child => {
+        // Normalize status strings for case-insensitive comparison
+        const status = child.paymentStatus.toLowerCase();
+        return status.includes(statusFilter.toLowerCase());
+      });
+    }
+    
+    // Apply payment mode filter
+    if (paymentModeFilter !== "all") {
+      childRows = childRows.filter(child => {
+        const mode = child.paymentMode.toLowerCase();
+        return mode === paymentModeFilter.toLowerCase();
+      });
+    }
+    
+    // Apply OTP verification filter
+    if (otpFilter !== "all") {
+      childRows = childRows.filter(child => {
+        if (otpFilter === "verified") return child.otpVerified;
+        return !child.otpVerified;
+      });
+    }
+    
+    // Apply date range filter
+    if (dateRange.from && dateRange.to) {
+      const fromDate = startOfDay(dateRange.from);
+      const toDate = endOfDay(dateRange.to);
       
-      // Payment status filter
-      if (statusFilter !== "all" && row.paymentStatus !== statusFilter) {
-        return false;
-      }
-      
-      // Payment mode filter
-      if (paymentModeFilter !== "all" && row.paymentMode !== paymentModeFilter) {
-        return false;
-      }
-      
-      // OTP verification filter
-      if (otpFilter === "verified" && !row.otpVerified) {
-        return false;
-      } else if (otpFilter === "pending" && row.otpVerified) {
-        return false;
-      }
-      
-      // Date range filter
-      if (dateRange.from && dateRange.to) {
+      childRows = childRows.filter(child => {
         try {
-          // Check if transactionDate exists and is properly formatted
-          if (!row.transactionDate || typeof row.transactionDate !== 'string') {
-            return false; // Filter out entries without valid dates
-          }
-          
-          // Make sure transactionDate is in the expected format before splitting
-          if (!row.transactionDate.includes('/')) {
-            return false;
-          }
-          
-          const [day, month, year] = row.transactionDate.split('/').map(Number);
-          
-          // Validate that we have valid date components
-          if (!day || !month || !year || isNaN(day) || isNaN(month) || isNaN(year)) {
-            return false;
-          }
-          
-          const bookingDate = new Date(year, month - 1, day);
-          
-          // Validate the resulting date
-          if (isNaN(bookingDate.getTime())) {
-            return false;
-          }
-          
-          const start = new Date(dateRange.from);
-          start.setHours(0, 0, 0, 0);
-          
-          const end = new Date(dateRange.to);
-          end.setHours(23, 59, 59, 999);
-          
-          if (bookingDate < start || bookingDate > end) {
-            return false;
-          }
-        } catch (e) {
-          console.error("Error parsing date:", e, row);
-          return false; // If there's any error in date handling, filter out the row
+          const date = new Date(child.transactionDate);
+          return isWithinInterval(date, { start: fromDate, end: toDate });
+        } catch {
+          console.error("Invalid date:", child.transactionDate);
+          return false;
         }
-      }
-      
-      // If passed all filters, include the row
-      return true;
-    });
+      });
+    }
     
-    // Sort by transaction date - most recent first
+    // Sort by transaction date (newest first)
     childRows.sort((a, b) => {
       try {
-        // Parse dates from DD/MM/YYYY format
-        const [dayA, monthA, yearA] = a.transactionDate.split('/').map(Number);
-        const [dayB, monthB, yearB] = b.transactionDate.split('/').map(Number);
-        
-        // Create Date objects
-        const dateA = new Date(yearA, monthA - 1, dayA);
-        const dateB = new Date(yearB, monthB - 1, dayB);
-        
-        // Validate dates before comparing
-        if (isNaN(dateA.getTime()) || isNaN(dateB.getTime())) {
-          return 0; // Keep original order if dates are invalid
-        }
-        
-        // Sort descending (newest first)
+        const dateA = new Date(a.transactionDate);
+        const dateB = new Date(b.transactionDate);
         return dateB.getTime() - dateA.getTime();
-      } catch (error) {
-        console.error("Error sorting by transaction date:", error);
+      } catch {
+        console.error("Error sorting by transaction date");
         return 0; // Keep original order on error
       }
     });
     
     return childRows;
-  }, [bookings, searchQuery, statusFilter, paymentModeFilter, otpFilter, dateRange, transformBookingsToChildRows]);
+  }, [bookings, searchQuery, statusFilter, paymentModeFilter, otpFilter, dateRange, transformBookingsToChildRows, excludePhoneNumbers]);
 
   // Count active filters for the filter summary
   const activeFilterCount = useMemo(() => {

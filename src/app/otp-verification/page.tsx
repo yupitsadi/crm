@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useDebouncedCallback } from "use-debounce";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -355,9 +356,52 @@ export default function OtpVerificationPage() {
   const [workshopThemes, setWorkshopThemes] = useState<Record<string, string>>({});
   // Add a ref to track when the tracker status was last cleaned
   const lastCleanedRef = useRef<number>(Date.now());
-  // Add a ref to track the last save time
-  const lastSavedRef = useRef<number>(Date.now());
+  
+  // Add a ref to track if initial fetch has happened
+  const initialFetchDoneRef = useRef<boolean>(false);
   // const router = useRouter(); // Commented out as it's currently unused
+
+  // Function to fetch workshop themes by IDs - Define this BEFORE fetchOtpData
+  const fetchWorkshopThemes = useCallback(async (workshopIds: string[]) => {
+    if (!workshopIds.length) return;
+    
+    try {
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+      if (!token) return;
+      
+      // Only fetch themes for workshops we don't already have
+      const missingThemeIds = workshopIds.filter(id => !workshopThemes[id]);
+      
+      if (missingThemeIds.length === 0) {
+        console.log("All workshop themes already cached, skipping fetch");
+        return;
+      }
+      
+      console.log(`Fetching themes for ${missingThemeIds.length} workshops`);
+      
+      // Use the batch API instead of individual requests
+      const response = await fetch(`/api/workshop-themes?ids=${missingThemeIds.join(',')}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.themes) {
+          setWorkshopThemes(prev => ({
+            ...prev,
+            ...data.themes
+          }));
+          console.log(`Fetched ${Object.keys(data.themes).length} workshop themes (${data.cached} from cache, ${data.fetched} from DB)`);
+        }
+      } else {
+        console.error("Failed to fetch workshop themes:", await response.text());
+      }
+    } catch (error) {
+      console.error("Error fetching workshop themes:", error);
+    }
+  }, [workshopThemes]);
 
   // Memoize functions with useCallback
   const fetchTrackerStatus = useCallback(async () => {
@@ -407,48 +451,6 @@ export default function OtpVerificationPage() {
       }
     }
   }, []);
-
-  // Function to fetch workshop themes by IDs - Define this BEFORE fetchOtpData
-  const fetchWorkshopThemes = useCallback(async (workshopIds: string[]) => {
-    if (!workshopIds.length) return;
-    
-    try {
-      const token = localStorage.getItem("token") || sessionStorage.getItem("token");
-      if (!token) return;
-      
-      // Only fetch themes for workshops we don't already have
-      const missingThemeIds = workshopIds.filter(id => !workshopThemes[id]);
-      
-      if (missingThemeIds.length === 0) {
-        console.log("All workshop themes already cached, skipping fetch");
-        return;
-      }
-      
-      console.log(`Fetching themes for ${missingThemeIds.length} workshops`);
-      
-      // Use the batch API instead of individual requests
-      const response = await fetch(`/api/workshop-themes?ids=${missingThemeIds.join(',')}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.themes) {
-          setWorkshopThemes(prev => ({
-            ...prev,
-            ...data.themes
-          }));
-          console.log(`Fetched ${Object.keys(data.themes).length} workshop themes (${data.cached} from cache, ${data.fetched} from DB)`);
-        }
-      } else {
-        console.error("Failed to fetch workshop themes:", await response.text());
-      }
-    } catch (error) {
-      console.error("Error fetching workshop themes:", error);
-    }
-  }, [workshopThemes]);
 
   // Now define fetchOtpData after fetchWorkshopThemes is defined
   const fetchOtpData = useCallback(async () => {
@@ -511,9 +513,63 @@ export default function OtpVerificationPage() {
 
   // Handle refresh button click
   const handleRefresh = useCallback(() => {
-    fetchOtpData();
+    // Add force refresh parameter when manually refreshing
+    const refreshOtpData = async () => {
+      try {
+        setIsLoading(true);
+        const token = localStorage.getItem("token") || sessionStorage.getItem("token");
+        
+        if (!token) {
+          throw new Error("Authentication token not found");
+        }
+        
+        // Add refresh=true parameter to bypass cache
+        const response = await fetch("/api/otp-verification?refresh=true", {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        
+        if (response.status === 401) {
+          throw new Error("Not authorized to access OTP data");
+        }
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.verifications && Array.isArray(data.verifications)) {
+          setOtpData(data.verifications);
+          
+          // Extract unique workshop IDs
+          const workshopIds = new Set<string>();
+          data.verifications.forEach((verification: VerificationData) => {
+            if (verification.workshopId) {
+              workshopIds.add(verification.workshopId);
+            }
+          });
+          
+          // Fetch workshop themes
+          fetchWorkshopThemes(Array.from(workshopIds));
+          
+          // Update refresh time
+          setLastRefreshTime(new Date());
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : "Failed to refresh data";
+        setError(errorMessage);
+        console.error("Error refreshing OTP data:", err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    // Execute refresh functions
+    refreshOtpData();
     fetchTrackerStatus();
-  }, [fetchOtpData, fetchTrackerStatus]);
+  }, [fetchWorkshopThemes, fetchTrackerStatus]);
 
   // Format the last refresh time for display
   const formatRefreshTime = useCallback((date: Date | null) => {
@@ -530,96 +586,10 @@ export default function OtpVerificationPage() {
     }).format(date);
   }, []);
 
-  // This useEffect will update the last refresh time on initial load
+  // This useEffect handles data loading and cleanup
   useEffect(() => {
-    fetchOtpData();
-    fetchTrackerStatus();
-  }, [fetchOtpData, fetchTrackerStatus]);
-
-  // Save tracker status to server
-  const saveTrackerStatus = useCallback(async () => {
-    try {
-      setIsSavingTracker(true);
-
-      // Clean up localStorage data before saving
-      // Only store items that are "done" or are from the last 30 days
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      
-      const localStorageItems = Object.entries(trackerStatus)
-        .filter(([, data]) => {
-          // Keep items that are either marked as "done" or were updated recently
-          return data.status === "done" || 
-                 new Date(data.lastUpdatedAt) >= thirtyDaysAgo;
-        })
-        .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
-      
-      // Save the cleaned up data to localStorage
-      localStorage.setItem("otpTrackerStatus", JSON.stringify(localStorageItems));
-
-      // Get the JWT token from local storage
-      const token =
-        localStorage.getItem("token") || sessionStorage.getItem("token");
-
-      if (!token) {
-        console.error("Authentication token not found");
-        setIsSavingTracker(false);
-        return;
-      }
-
-      const response = await fetch("/api/tracker-status", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ trackerStatus }),
-      });
-
-      if (response.status === 401) {
-        console.error("Not authorized to save tracker status");
-        setIsSavingTracker(false);
-        return;
-      }
-
-      if (!response.ok) {
-        throw new Error(`Error: ${response.status}`);
-      }
-
-      // Check if we need to clean up the tracker status
-      // Clean if there are too many items or if it's been more than 24 hours
-      const MAX_ITEMS = 1000;
-      const ONE_DAY_MS = 86400000; // 24 hours in milliseconds
-      
-      if (Object.keys(trackerStatus).length > MAX_ITEMS ||
-          Date.now() - lastCleanedRef.current > ONE_DAY_MS) {
-        // Keep only recent items or most active ones
-        const itemsToKeep = Object.entries(trackerStatus)
-          .sort((a, b) => {
-            // Sort by lastUpdatedAt time (most recent first)
-            const timeA = new Date(a[1].lastUpdatedAt).getTime();
-            const timeB = new Date(b[1].lastUpdatedAt).getTime();
-            return timeB - timeA;
-          })
-          .slice(0, Math.floor(MAX_ITEMS / 2))
-          .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
-        
-        setTrackerStatus(itemsToKeep);
-        lastCleanedRef.current = Date.now();
-      }
-    } catch (err) {
-      console.error("Failed to save tracker status:", err);
-    } finally {
-      setIsSavingTracker(false);
-    }
-  }, [trackerStatus]);
-
-  useEffect(() => {
-    fetchOtpData();
-    fetchTrackerStatus();
-    
-    // Set up a periodic cleanup every hour to prevent memory growth
-    const cleanupInterval = setInterval(() => {
+    // Define the cleanup function to be used for tracker status
+    const cleanupTrackerStatus = () => {
       if (Object.keys(trackerStatus).length > 500) {
         // Keep only recent or done items
         const thirtyDaysAgo = new Date();
@@ -638,34 +608,118 @@ export default function OtpVerificationPage() {
           return itemsToKeep;
         });
       }
-    }, 3600000); // 1 hour
+    };
+
+    // Only fetch data once on initial mount
+    if (!initialFetchDoneRef.current) {
+      fetchOtpData();
+      fetchTrackerStatus();
+      initialFetchDoneRef.current = true;
+    }
+    
+    // Set up a periodic cleanup every hour to prevent memory growth
+    const cleanupInterval = setInterval(cleanupTrackerStatus, 3600000); // 1 hour
     
     // Cleanup function to clear interval when component unmounts
     return () => {
       clearInterval(cleanupInterval);
     };
-  }, [fetchOtpData, fetchTrackerStatus]);
+    // We intentionally only want this to run once on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array is intentional - only run on mount
 
-  // Save tracker status to server (debounced)
+  // Create a properly debounced save function
+  const debouncedSaveTrackerStatus = useDebouncedCallback(
+    async () => {
+      try {
+        setIsSavingTracker(true);
+
+        // Clean up localStorage data before saving
+        // Only store items that are "done" or are from the last 30 days
+        const thirtyDaysAgo = new Date();
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+        
+        const localStorageItems = Object.entries(trackerStatus)
+          .filter(([, data]) => {
+            // Keep items that are either marked as "done" or were updated recently
+            return data.status === "done" || 
+                  new Date(data.lastUpdatedAt) >= thirtyDaysAgo;
+          })
+          .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+        
+        // Save the cleaned up data to localStorage
+        localStorage.setItem("otpTrackerStatus", JSON.stringify(localStorageItems));
+
+        // Get the JWT token from local storage
+        const token =
+          localStorage.getItem("token") || sessionStorage.getItem("token");
+
+        if (!token) {
+          console.error("Authentication token not found");
+          setIsSavingTracker(false);
+          return;
+        }
+
+        const response = await fetch("/api/tracker-status", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ trackerStatus }),
+        });
+
+        if (response.status === 401) {
+          console.error("Not authorized to save tracker status");
+          setIsSavingTracker(false);
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(`Error: ${response.status}`);
+        }
+
+        // Check if we need to clean up the tracker status
+        // Clean if there are too many items or if it's been more than 24 hours
+        const MAX_ITEMS = 1000;
+        const ONE_DAY_MS = 86400000; // 24 hours in milliseconds
+        
+        if (Object.keys(trackerStatus).length > MAX_ITEMS ||
+            Date.now() - lastCleanedRef.current > ONE_DAY_MS) {
+          // Keep only recent items or most active ones
+          const itemsToKeep = Object.entries(trackerStatus)
+            .sort((a, b) => {
+              // Sort by lastUpdatedAt time (most recent first)
+              const timeA = new Date(a[1].lastUpdatedAt).getTime();
+              const timeB = new Date(b[1].lastUpdatedAt).getTime();
+              return timeB - timeA;
+            })
+            .slice(0, Math.floor(MAX_ITEMS / 2))
+            .reduce((obj, [key, value]) => ({ ...obj, [key]: value }), {});
+          
+          setTrackerStatus(itemsToKeep);
+          lastCleanedRef.current = Date.now();
+        }
+      } catch (err) {
+        console.error("Failed to save tracker status:", err);
+      } finally {
+        setIsSavingTracker(false);
+      }
+    },
+    // Debounce delay: 2000ms (2 seconds) - more efficient than the previous approach
+    2000
+  );
+
+  // Update effect to use the debounced save function
   useEffect(() => {
     // Skip initial empty state
     if (Object.keys(trackerStatus).length === 0) return;
-
-    const MIN_SAVE_INTERVAL = 5000; // Minimum 5 seconds between saves
-    const now = Date.now();
-
-    // If not enough time has passed since last save, set a longer timeout
-    const delay = now - lastSavedRef.current < MIN_SAVE_INTERVAL
-      ? MIN_SAVE_INTERVAL  // Use full interval if saved recently
-      : 1000;              // Use shorter debounce if it's been a while
     
-    const timeoutId = setTimeout(() => {
-      saveTrackerStatus();
-      lastSavedRef.current = Date.now();
-    }, delay);
+    // Call the debounced save function directly
+    debouncedSaveTrackerStatus();
     
-    return () => clearTimeout(timeoutId);
-  }, [trackerStatus, saveTrackerStatus]);
+    // No need for manual timeout management
+  }, [trackerStatus, debouncedSaveTrackerStatus]);
 
   // Format booking time from createdAt - convert UTC to IST (UTC+5:30)
   const formatBookingTime = (createdAt: string) => {

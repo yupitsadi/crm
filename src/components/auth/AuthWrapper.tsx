@@ -53,6 +53,8 @@ export default function AuthWrapper({ children }: AuthWrapperProps) {
   // Use refs to prevent dependency cycles
   const isInitialMount = useRef(true);
   const isRefreshing = useRef(false);
+  // Add ref for storing interval ID to prevent recreating it on re-renders
+  const tokenCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Public routes that don't require authentication
   const publicRoutes = ['/login', '/signup', '/forgot-password', '/reset-password'];
@@ -204,7 +206,14 @@ export default function AuthWrapper({ children }: AuthWrapperProps) {
   // Token refresh interval
   useEffect(() => {
     // Skip if not authenticated
-    if (!isAuthenticated) return;
+    if (!isAuthenticated) {
+      // Clear any existing interval
+      if (tokenCheckIntervalRef.current) {
+        clearInterval(tokenCheckIntervalRef.current);
+        tokenCheckIntervalRef.current = null;
+      }
+      return;
+    }
     
     // Function to check token expiration
     const checkTokenExpiration = () => {
@@ -214,11 +223,21 @@ export default function AuthWrapper({ children }: AuthWrapperProps) {
       }
     };
     
-    // Set up interval
-    const intervalId = setInterval(checkTokenExpiration, 5 * 60 * 1000);
+    // Clear any existing interval before setting a new one
+    if (tokenCheckIntervalRef.current) {
+      clearInterval(tokenCheckIntervalRef.current);
+    }
+    
+    // Set up interval - check every 10 minutes instead of 5
+    tokenCheckIntervalRef.current = setInterval(checkTokenExpiration, 10 * 60 * 1000);
     
     // Clean up on unmount
-    return () => clearInterval(intervalId);
+    return () => {
+      if (tokenCheckIntervalRef.current) {
+        clearInterval(tokenCheckIntervalRef.current);
+        tokenCheckIntervalRef.current = null;
+      }
+    };
   }, [isAuthenticated, refreshSession]);
   
   // Show loading spinner while checking authentication
